@@ -1,0 +1,7 @@
+build/
+releases/
+state/
+diagnostics/
+*.log
+__pycache__/
+usb hack/
