@@ -521,7 +521,7 @@ public:
                 else notice = "Input change failed. The recovery snapshot was kept if needed.";
             } else if (job == "experiment-restore") {
                 if (reply.code == 0) {
-                    if (closingExperiments) { page = 2; selected = 1; closingExperiments = false; }
+                    if (closingExperiments) { page = 2; selected = 0; closingExperiments = false; }
                     else start("controls");
                 } else {
                     closingExperiments = false;
@@ -586,7 +586,7 @@ public:
             return;
         }
         if (page == 1) {
-            if (key == Key::cancel) { page = 0; selected = 3; needReport = false; }
+            if (key == Key::cancel) { page = 0; selected = 4; needReport = false; }
             else if (key == Key::up) infoOffset = std::max(0, infoOffset - 1);
             else if (key == Key::down) infoOffset = std::min(std::max(0, static_cast<int>(reportLines.size()) - 10), infoOffset + 1);
             else if (key == Key::left) infoOffset = std::max(0, infoOffset - 10);
@@ -599,12 +599,11 @@ public:
         }
         if (page == 2) {
             if (key == Key::cancel) page = 1;
-            else if (key == Key::up) selected = (selected + 3) % 4;
-            else if (key == Key::down) selected = (selected + 1) % 4;
+            else if (key == Key::up) selected = (selected + 2) % 3;
+            else if (key == Key::down) selected = (selected + 1) % 3;
             else if (key == Key::accept) {
-                if (selected == 0) confirm = "discover";
-                else if (selected == 1) start("controls");
-                else if (selected == 2) { closingExperiments = true; confirm = "experiment-restore"; }
+                if (selected == 0) start("controls");
+                else if (selected == 1) { closingExperiments = true; confirm = "experiment-restore"; }
                 else page = 1;
             } else if (key == Key::quit) { quitAfter = true; start("cleanup"); }
             return;
@@ -626,12 +625,13 @@ public:
             return;
         }
         switch (key) {
-            case Key::up: selected = (selected + 3) % 4; break;
-            case Key::down: selected = (selected + 1) % 4; break;
+            case Key::up: selected = (selected + 4) % 5; break;
+            case Key::down: selected = (selected + 1) % 5; break;
             case Key::accept:
                 if (selected == 0) confirm = enabled() ? "mic-off" : "mic-on";
                 else if (selected == 1) confirm = persistent() ? "persist-off" : "persist-on";
                 else if (selected == 2) confirm = "audio-test";
+                else if (selected == 3) confirm = "discover";
                 else { page = 1; needReport = true; }
                 break;
             case Key::refresh: start("status"); break;
@@ -657,7 +657,8 @@ public:
             menu(1, std::string("Keep after restart: ") + (persistent() ? "Yes" :
                 get("PERSIST") == "disabled" ? "No" : "Unknown"));
             menu(2, "Test");
-            menu(3, "Info");
+            menu(3, "Discover inputs");
+            menu(4, "Info");
         } else if (page == 1) {
             screen.text(40, 108, "Info / Audio + MIDI", gold);
             if (reportLines.empty()) line(0, "Loading...", muted);
@@ -670,10 +671,9 @@ public:
             }
         } else if (page == 2) {
             screen.text(40, 108, "Explore / Advanced", gold);
-            menu(0, "Discover inputs");
-            menu(1, "Try input controls");
-            menu(2, "Undo input experiments");
-            menu(3, "Back");
+            menu(0, "Try input controls");
+            menu(1, "Undo input experiments");
+            menu(2, "Back");
         } else {
             screen.text(40, 108, "Input controls / Temporary", gold);
             if (inputControls.empty()) line(0, "No editable input controls found.", muted);
@@ -743,7 +743,7 @@ public:
         input(Key::accept);
         if (page != 1 || !confirm.empty()) return false;
         input(Key::cancel);
-        if (page != 0 || selected != 3 || busy || needReport) return false;
+        if (page != 0 || selected != 4 || busy || needReport) return false;
         input(Key::down);
         input(Key::accept);
         if (confirm != "mic-on") return false;
@@ -765,13 +765,17 @@ public:
         input(Key::accept);
         if (confirm != "audio-test") return false;
         input(Key::cancel);
+        input(Key::down);
+        input(Key::accept);
+        if (page != 0 || confirm != "discover") return false;
+        input(Key::cancel);
+        if (selected != 3 || !confirm.empty() || busy) return false;
         page = 1;
         input(Key::explore);
         if (page != 2 || selected != 0) return false;
+        input(Key::up);
+        if (selected != 2) return false;
         input(Key::accept);
-        if (confirm != "discover") return false;
-        input(Key::cancel);
-        input(Key::cancel);
         if (page != 1) return false;
         if (!readControls("CONTROL_1=card|5|MIC gain|INTEGER|0|31|2|4,7\n")) return false;
         changeValue(1);

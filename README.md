@@ -13,7 +13,7 @@ Built for handheld buttons, not a desktop mouse.
 &nbsp; | &nbsp;
 [Report a problem / suggest a console](https://github.com/paiheulevrai/ChooChooHacker/issues)
 
-![ChooChooHacker main screen, with microphone status and four actions](docs/screenshots/main.png)
+![ChooChooHacker main screen, with microphone status and five actions](docs/screenshots/main.png)
 
 </div>
 
@@ -30,7 +30,8 @@ Built for handheld buttons, not a desktop mouse.
 | Keep either choice after rebooting | **Keep after restart** |
 | Check what the input actually hears | **Test** |
 | Troubleshoot audio or MIDI | **Info**, then export a diagnostic |
-| Investigate another audio input or console | **Info > Explore** |
+| Find and test another audio input | **Discover inputs**, on the main screen |
+| Experiment with input mixer settings | **Info > Explore** |
 | Control it from another application | The [public CLI](#cli-for-other-apps) |
 
 No background recording, telemetry or network access. No tracker modification.
@@ -155,6 +156,8 @@ automatically.
 - **Keep after restart:** remember the chosen state, including **Disabled**.
 - **Test:** confirm, make noise for three seconds, see the waveform and hear
   automatic replay at 25% digital level. Keep physical speaker volume low.
+- **Discover inputs:** look for usable audio inputs directly from the main
+  screen, without waiting for Info to load. Capture starts only after confirmation.
 - **Info:** scroll the audio/MIDI diagnostic report, export it or open Explore.
 
 Up/Down selects; physical A confirms; B cancels or goes back; Start exits.
@@ -228,9 +231,9 @@ gh issue create --repo paiheulevrai/ChooChooHacker --web \
 Attach your observations (what was connected, actions tried, whether a sound
 was actually heard). Submit only after checking the preview.
 
-## Explore / advanced
+## Discovery and advanced controls
 
-**Discover inputs** enumerates up to eight named ALSA capture inputs and briefly
+**Discover inputs**, on the main screen, enumerates up to eight named ALSA capture inputs and briefly
 opens each, with no automatic mixer changes. If available, `arecord` also dumps
 hardware capabilities while discarding its one-second capture to `/dev/null`.
 An SDL probe checks the format used by Test. Results go to `discovery.log`;
@@ -238,7 +241,7 @@ the first usable input is selected for Test for this app session only.
 B stops Discovery. Stream success is **not** acoustic mic identification.
 On a supported Smart Pro, use Enable first if its input is disabled.
 
-**Try input controls** is for manual experiments, including unknown consoles.
+**Info > Y Explore > Try input controls** is for manual experiments, including unknown consoles.
 Only writable boolean, integer or enumerated input/mic/capture/ADC controls are
 offered; output/playback/speaker controls are excluded. This is a conservative
 name filter, not a certified hardware profile. Change one value with Left/Right
@@ -279,9 +282,9 @@ The known Smart Pro PCM-opening failure is tracked in
 or an explicit restore. **Does the persistent hook delete itself?** No: only
 the temporary restoration hook is one-shot.
 
-**Can I test another console?** Export Info first. Explore can probe capture
-inputs and offers carefully limited manual input controls, but it does not
-silently apply the Smart Pro patch to another model. Share your report and
+**Can I test another console?** Export Info first. Discover inputs probes capture
+inputs; Info > Explore offers carefully limited manual input controls. Neither
+silently applies the Smart Pro patch to another model. Share your report and
 observations; do not assume matching control names mean matching hardware.
 
 ## CLI for other apps
