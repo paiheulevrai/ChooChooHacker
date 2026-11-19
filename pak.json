@@ -1,0 +1,21 @@
+{
+  "name": "ChooChoohacker - Microphone activator",
+  "storefront_name": "ChooChoohacker - Microphone activator",
+  "version": "v0.1.2",
+  "type": "TOOL",
+  "description": "Enable and test the built-in mic on supported TrimUI consoles.",
+  "author": "paiheulevrai",
+  "repo_url": "https://github.com/paiheulevrai/ChooChooHacker",
+  "release_filename": "ChooChooHacker.pak.zip",
+  "changelog": {
+    "v0.1.2": "Enable MIC1 by default at boot on NextUI tg5040 and tg5050."
+  },
+  "screenshots": [
+    "docs/screenshots/main.png",
+    "docs/screenshots/info.png"
+  ],
+  "platforms": [
+    "tg5040",
+    "tg5050"
+  ]
+}

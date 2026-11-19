@@ -6,8 +6,17 @@ R=${CHH_ROOT:-}
 STATE="$HOME_DIR/state"
 BASELINE="$STATE/mic-baseline"
 TARGET_STATE="$STATE/mic-target"
+DEFAULT_CONFIGURED="$STATE/mic-default-configured"
 EXPERIMENTS="$STATE/experiments"
-HOOK="$R/mnt/SDCARD/.userdata/tg5040/.hooks/boot.d/90-choochoohacker.sh"
+PLATFORM=${PLATFORM:-}
+case "$PLATFORM" in
+    tg5040|tg5050) ;;
+    *)
+        PLATFORM=tg5040
+        [ ! -f "$R/mnt/SDCARD/.system/tg5050/bin/run_hooks.sh" ] || PLATFORM=tg5050 ;;
+esac
+HOOK="$R/mnt/SDCARD/.userdata/$PLATFORM/.hooks/boot.d/90-choochoohacker.sh"
+LEGACY_HOME="$R/mnt/SDCARD/Tools/$PLATFORM/ChooChooHacker.pak"
 MARKER='# ChooChooHacker owned MIC1 hook v1'
 TEMP_MARKER='# ChooChooHacker owned MIC1 temporary reset v1'
 BOOST='ADCL Input MIC1 Boost Switch'
@@ -19,7 +28,7 @@ read_file() { if [ -r "$1" ]; then tr '\000\n' '  ' < "$1"; else printf 'unavail
 model() {
     if [ -r "$R/usr/trimui/bin/MainUI" ]; then
         strings "$R/usr/trimui/bin/MainUI" |
-            sed -n '/^Trimui Smart Pro$/p; /^Trimui Brick$/p; /^Trimui Brick Pro$/p' | head -n 1
+            sed -n '/^Trimui Smart Pro S$/p; /^Trimui Smart Pro$/p; /^Trimui Brick$/p; /^Trimui Brick Pro$/p' | head -n 1
     fi
 }
 mixer() { timeout 3 amixer -D hw:audiocodec "$@"; }
@@ -45,13 +54,36 @@ persistent_hook() { [ -f "$HOOK" ] && grep -Fxq "$MARKER" "$HOOK"; }
 temporary_hook() { [ -f "$HOOK" ] && grep -Fxq "$TEMP_MARKER" "$HOOK"; }
 owned_hook() { persistent_hook || temporary_hook; }
 supported() {
-    [ "$(model)" = 'Trimui Smart Pro' ] || error 'MIC1 writes are only enabled for the Smart Pro test profile.'
-    [ "$(cat "$R/proc/sys/kernel/osrelease")" = '4.9.191' ] ||
-        error 'Untested kernel: diagnostic only.'
-    grep -q 'allwinner,a133' "$R/sys/firmware/devicetree/base/compatible" ||
-        error 'Untested SoC: diagnostic only.'
-    [ -f "$R/mnt/SDCARD/.system/tg5040/bin/run_hooks.sh" ] ||
+    [ "$PLATFORM" = tg5040 ] || [ "$PLATFORM" = tg5050 ] ||
+        error 'MIC1 writes require a supported NextUI TrimUI profile.'
+    [ -f "$R/mnt/SDCARD/.system/$PLATFORM/bin/run_hooks.sh" ] ||
         error 'NextUI hook runner not found: diagnostic only.'
+    case "$(model)" in
+        'Trimui Smart Pro'|'Trimui Brick'|'Trimui Brick Pro'|'Trimui Smart Pro S') ;;
+        *) error 'MIC1 writes are limited to supported TrimUI models.' ;;
+    esac
+}
+mark_default_configured() {
+    printf 'configured\n' > "$DEFAULT_CONFIGURED.new" &&
+        mv "$DEFAULT_CONFIGURED.new" "$DEFAULT_CONFIGURED"
+}
+migrate_legacy_state() {
+    [ "$HOME_DIR" != "$LEGACY_HOME" ] && [ -d "$LEGACY_HOME" ] || return 0
+    [ -f "$STATE/legacy-migration-complete" ] && return 0
+    [ ! -e "$LEGACY_HOME/state/lock" ] ||
+        error 'Close the old ChooChooHacker before migrating its settings.'
+    if [ -d "$LEGACY_HOME/state" ]; then
+        if [ -d "$STATE" ] && [ -n "$(ls -A "$STATE")" ]; then
+            error 'New and old ChooChooHacker state both exist; refusing to merge them.'
+        fi
+        mkdir -p "$STATE" || error 'Cannot create state directory for migration.'
+        cp -R "$LEGACY_HOME/state/." "$STATE/" ||
+            error 'Cannot copy previous ChooChooHacker settings.'
+    fi
+    mkdir -p "$STATE" || error 'Cannot create state directory for migration.'
+    printf 'migrated\n' > "$STATE/legacy-migration-complete.new" &&
+        mv "$STATE/legacy-migration-complete.new" "$STATE/legacy-migration-complete" ||
+        error 'Cannot save ChooChooHacker migration state.'
 }
 load_baseline() {
     [ -f "$BASELINE" ] || return 1
@@ -136,13 +168,15 @@ rollback_mic() {
 install_hook() {
     hook_marker=$1
     hook_action=$2
-    if [ -f "$HOOK" ] && grep -Fxq "$hook_marker" "$HOOK"; then return 0; fi
+    if [ -e "$HOOK" ] && ! owned_hook; then return 1; fi
     mkdir -p "$(dirname "$HOOK")" || return 1
     escaped=$(printf '%s' "$HOME_DIR" | sed "s/'/'\\\\''/g")
+    hook_log=boot.log
+    [ "$hook_action" != boot-default ] || hook_log=mic-default.log
     if ! {
         printf '#!/bin/sh\n%s\n' "$hook_marker"
         printf "CHH_HOME='%s'\n" "$escaped"
-        printf 'exec "$CHH_HOME/control.sh" %s >> "$CHH_HOME/boot.log" 2>&1\n' "$hook_action"
+        printf 'exec "$CHH_HOME/control.sh" %s >> "$CHH_HOME/%s" 2>&1\n' "$hook_action" "$hook_log"
     } > "$HOOK.new" || ! chmod +x "$HOOK.new" || ! mv "$HOOK.new" "$HOOK"; then
         rm -f "$HOOK.new"
         return 1
@@ -514,7 +548,8 @@ if [ "$ACTION" = discover ]; then
     mv "$HOME_DIR/discovery.log.new" "$HOME_DIR/discovery.log" || error 'Cannot save discovery results.'
     exit "$result"
 fi
-case "$ACTION" in mic-on|mic-off|restore|persist-on|persist-off|cleanup|boot|reset-temp|experiment-set|experiment-restore) ;; *) error 'Unknown action.' ;; esac
+case "$ACTION" in mic-on|mic-off|restore|persist-on|persist-off|setup-default|cleanup|boot|boot-default|reset-temp|experiment-set|experiment-restore) ;; *) error 'Unknown action.' ;; esac
+if [ "$ACTION" = setup-default ]; then migrate_legacy_state; fi
 if [ "$ACTION" = cleanup ] && [ ! -f "$BASELINE" ] && [ ! -e "$HOOK" ] && [ ! -d "$EXPERIMENTS" ]; then
     printf 'No app-owned mixer changes to clean up.\n'
     exit 0
@@ -531,7 +566,7 @@ if [ "$ACTION" = experiment-set ]; then
 fi
 if [ -d "$EXPERIMENTS" ]; then
     case "$ACTION" in
-        boot|reset-temp) printf 'WARNING: Pending manual experiments are not restored by boot hooks; inspect state/experiments.\n' >&2 ;;
+        boot|boot-default|reset-temp) printf 'WARNING: Pending manual experiments are not restored by boot hooks; inspect state/experiments.\n' >&2 ;;
         *) experiment_restore ;;
     esac
 fi
@@ -539,6 +574,30 @@ if [ "$ACTION" = experiment-restore ]; then exit 0; fi
 if [ "$ACTION" != cleanup ] || [ -f "$BASELINE" ] || [ -e "$HOOK" ]; then supported; fi
 
 case "$ACTION" in
+    setup-default)
+        if [ -f "$DEFAULT_CONFIGURED" ]; then
+            printf 'Default MIC1 setup already configured.\n'
+        else
+            if [ -e "$HOOK" ]; then
+                owned_hook || error 'Hook path occupied; preserving the existing hook.'
+                [ -f "$BASELINE" ] ||
+                    error 'Existing MIC1 hook has no saved baseline; preserving it.'
+            fi
+            if [ -f "$BASELINE" ] || [ -e "$HOOK" ]; then
+                printf 'Existing MIC1 setup found; preserving it.\n'
+                if persistent_hook; then
+                    install_hook "$MARKER" boot ||
+                        error 'Cannot update the persistent MIC1 hook.'
+                elif temporary_hook; then
+                    install_hook "$TEMP_MARKER" reset-temp ||
+                        error 'Cannot update the temporary MIC1 hook.'
+                fi
+            else
+                enable_with_hook "$MARKER" boot-default on
+            fi
+            mark_default_configured || error 'Cannot save default MIC1 setup state.'
+            printf 'MIC1 will be enabled by default after every NextUI startup.\n'
+        fi ;;
     mic-on|mic-off)
         if [ -e "$HOOK" ]; then
             owned_hook || error 'Unknown hook; refusing changes.'
@@ -550,6 +609,7 @@ case "$ACTION" in
         if [ -e "$HOOK" ]; then
             temporary_hook || error 'Disable persistence first.'
         fi
+        mark_default_configured || error 'Cannot save default MIC1 setup state.'
         restore
         if temporary_hook; then rm "$HOOK"; fi ;;
     cleanup)
@@ -569,11 +629,12 @@ case "$ACTION" in
     persist-off)
         if [ -e "$HOOK" ]; then
             owned_hook || error 'Not removing a hook owned by another tool.'
-            rm "$HOOK"
         fi
+        mark_default_configured || error 'Cannot save default MIC1 setup state.'
+        if [ -e "$HOOK" ]; then rm "$HOOK"; fi
         restore
         printf 'Persistence disabled.\n' ;;
-    boot)
+    boot|boot-default)
         persistent_hook || error 'Boot action requires our persistent hook.'
         load_baseline || error 'Boot baseline missing or invalid; refusing changes.'
         target=$(desired_state)

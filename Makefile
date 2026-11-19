@@ -39,9 +39,10 @@ package: $(TARGET)
 	cp LICENSE build/ChooChooHacker.pak/licenses/
 	cp LICENSE build/ChooChooHacker.pak/
 	cp README.md build/ChooChooHacker.pak/
+	cp pak.json build/ChooChooHacker.pak/
 	cp -r docs build/ChooChooHacker.pak/
 	chmod +x build/ChooChooHacker.pak/launch.sh build/ChooChooHacker.pak/control.sh
-	cd build && zip -qr -FS ../releases/ChooChooHacker.pak.zip ChooChooHacker.pak
+	cd build/ChooChooHacker.pak && zip -qr -FS ../../releases/ChooChooHacker.pak.zip .
 	cp -r build/ChooChooHacker.pak/. build/portmaster/choochoohacker/
 	rm -f build/portmaster/choochoohacker/launch.sh
 	cp packaging/ChooChooHacker.sh build/portmaster/

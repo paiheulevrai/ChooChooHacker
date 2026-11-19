@@ -92,7 +92,7 @@ class MixerTests(unittest.TestCase):
         )
         fake.chmod(0o755)
         self.env = dict(os.environ, CHH_ROOT=str(self.root), FAKE_MIXER=str(self.mixer_file),
-                        FAKE_FAIL=str(self.fail_file), FAKE_LOG=str(self.log),
+                        FAKE_FAIL=str(self.fail_file), FAKE_LOG=str(self.log), PLATFORM="tg5040",
                         PATH=str(binary) + os.pathsep + os.environ["PATH"])
 
     def run_action(self, action, success=True, args=()):
@@ -107,6 +107,19 @@ class MixerTests(unittest.TestCase):
 
     def values(self):
         return json.loads(self.mixer_file.read_text())
+
+    def set_profile(self, profile):
+        self.env["PLATFORM"] = profile
+        for candidate in ("tg5040", "tg5050"):
+            runner = self.root / f"mnt/SDCARD/.system/{candidate}/bin/run_hooks.sh"
+            runner.parent.mkdir(parents=True, exist_ok=True)
+            if candidate == profile:
+                runner.write_text("# fake hook runner\n")
+            elif runner.exists():
+                runner.unlink()
+        model = "Trimui Smart Pro S" if profile == "tg5050" else "Trimui Smart Pro"
+        (self.root / "usr/trimui/bin/MainUI").write_text(model + "\n")
+        self.hook = self.root / f"mnt/SDCARD/.userdata/{profile}/.hooks/boot.d/90-choochoohacker.sh"
 
     def run_cli(self, *args, code=0):
         executable = self.app / "choochoohacker"
@@ -141,7 +154,7 @@ class MixerTests(unittest.TestCase):
     def test_cli_reports_usage_and_backend_errors_on_stderr(self):
         self.run_cli("status", "extra", code=2)
         self.run_cli("boot", code=2)
-        (self.root / "usr/trimui/bin/MainUI").write_text("Trimui Brick\n")
+        (self.root / "usr/trimui/bin/MainUI").write_text("Unknown handheld\n")
         result = self.run_cli("mic-on", code=1)
         self.assertIn("ERROR:", result.stderr)
         self.assertEqual(result.stdout, "")
@@ -242,6 +255,94 @@ class MixerTests(unittest.TestCase):
         self.assertEqual(self.values(), CONTROLS)
         self.assertFalse(self.hook.exists())
         self.run_action("persist-off")
+
+    def test_default_setup_installs_on_boot_for_tg5040(self):
+        self.assert_default_setup("tg5040")
+
+    def test_default_setup_installs_on_boot_for_tg5050(self):
+        self.assert_default_setup("tg5050")
+
+    def assert_default_setup(self, profile):
+        self.set_profile(profile)
+        self.run_action("setup-default")
+        self.assertEqual(self.values()["ADCL Input MIC1 Boost Switch"], "on")
+        self.assertEqual(self.values()["MIC1 gain volume"], "31")
+        self.assertEqual(self.values()["ADC volume"], "160,160")
+        self.assertTrue(self.hook.exists())
+        self.assertIn("mic-default.log", self.hook.read_text())
+        self.assertTrue((self.app / "state/mic-default-configured").exists())
+        self.assertIn("PERSIST=enabled", self.run_action("status").stdout)
+
+        self.mixer_file.write_text(json.dumps(CONTROLS))
+        result = subprocess.run(["sh", str(self.hook)], env=self.env, capture_output=True, timeout=20)
+        self.assertEqual(result.returncode, 0, (self.app / "mic-default.log").read_text())
+        self.assertEqual(self.values()["MIC1 gain volume"], "31")
+        self.assertIn("MIC1 route set to on", (self.app / "mic-default.log").read_text())
+
+    def test_default_setup_is_idempotent_and_preserves_explicit_disable(self):
+        self.run_action("setup-default")
+        self.run_action("mic-off")
+        self.run_action("setup-default")
+        self.assertEqual(self.values()["ADCL Input MIC1 Boost Switch"], "off")
+        self.assertEqual((self.app / "state/mic-target").read_text().strip(), "off")
+        self.mixer_file.write_text(json.dumps(CONTROLS))
+        self.run_action("boot")
+        self.assertEqual(self.values()["MIC1 gain volume"], "0")
+
+    def test_persist_off_disables_future_default_setup(self):
+        self.run_action("setup-default")
+        self.run_action("persist-off")
+        self.run_action("setup-default")
+        self.assertFalse(self.hook.exists())
+        self.assertEqual(self.values(), CONTROLS)
+        self.assertTrue((self.app / "state/mic-default-configured").exists())
+
+    def test_default_setup_rolls_back_on_activation_failure(self):
+        self.fail_file.touch()
+        result = self.run_action("setup-default", success=False)
+        self.assertIn("rolling back", result.stderr)
+        self.assertEqual(self.values(), CONTROLS)
+        self.assertFalse(self.hook.exists())
+        self.assertFalse((self.app / "state/mic-default-configured").exists())
+
+    def test_renamed_install_migrates_state_and_updates_its_boot_hook(self):
+        legacy = self.root / "mnt/SDCARD/Tools/tg5040/ChooChooHacker.pak"
+        legacy_state = legacy / "state"
+        legacy_state.mkdir(parents=True)
+        (legacy_state / "mic-baseline").write_text(
+            "off\n4\n190,155\n"
+        )
+        (legacy_state / "mic-target").write_text("on\n")
+        self.hook.parent.mkdir(parents=True)
+        self.hook.write_text(
+            "#!/bin/sh\n"
+            "# ChooChooHacker owned MIC1 hook v1\n"
+            "CHH_HOME='/mnt/SDCARD/Tools/tg5040/ChooChooHacker.pak'\n"
+            "exec \"$CHH_HOME/control.sh\" boot >> \"$CHH_HOME/boot.log\" 2>&1\n"
+        )
+
+        self.run_action("setup-default")
+
+        new_state = self.app / "state"
+        self.assertEqual((new_state / "mic-baseline").read_text(), "off\n4\n190,155\n")
+        self.assertEqual((new_state / "mic-target").read_text(), "on\n")
+        self.assertTrue((new_state / "legacy-migration-complete").exists())
+        self.assertIn(str(self.app), self.hook.read_text())
+        self.assertNotIn("Tools/tg5040/ChooChooHacker.pak", self.hook.read_text())
+        self.assertTrue((legacy_state / "mic-baseline").exists())
+
+        self.mixer_file.write_text(json.dumps(CONTROLS))
+        result = subprocess.run(["sh", str(self.hook)], env=self.env, capture_output=True, timeout=20)
+        self.assertEqual(result.returncode, 0, (self.app / "boot.log").read_text())
+        self.assertEqual(self.values()["MIC1 gain volume"], "31")
+
+    def test_renamed_install_refuses_to_copy_state_while_old_app_is_locked(self):
+        legacy_state = self.root / "mnt/SDCARD/Tools/tg5040/ChooChooHacker.pak/state"
+        (legacy_state / "lock").mkdir(parents=True)
+        result = self.run_action("setup-default", success=False)
+        self.assertIn("Close the old ChooChooHacker", result.stderr)
+        self.assertFalse((self.app / "state/mic-baseline").exists())
+        self.assertFalse((self.app / "state/legacy-migration-complete").exists())
 
     def test_disabled_target_persists_and_original_values_remain_restorable(self):
         self.run_action("mic-on")
@@ -385,18 +486,24 @@ class MixerTests(unittest.TestCase):
         self.run_action("mic-on", success=False)
         self.run_action("persist-on", success=False)
         self.run_action("persist-off", success=False)
+        self.run_action("setup-default", success=False)
         self.assertEqual(self.hook.read_text(), "# another application's hook\n")
         self.assertFalse(self.log.exists())
 
-    def test_unknown_hardware_and_kernel_are_read_only(self):
+    def test_unknown_hardware_and_unsupported_nextui_profile_are_read_only(self):
         model = self.root / "usr/trimui/bin/MainUI"
-        model.write_text("Trimui Brick\n")
+        model.write_text("Unknown handheld\n")
         self.run_action("mic-on", success=False)
         self.run_action("cleanup")
-        model.write_text("Trimui Smart Pro\n")
-        (self.root / "proc/sys/kernel/osrelease").write_text("6.1\n")
-        self.run_action("persist-on", success=False)
+        (self.root / "mnt/SDCARD/.system/tg5040/bin/run_hooks.sh").unlink()
+        self.run_action("setup-default", success=False)
         self.assertFalse(self.log.exists())
+
+    def test_tg5040_brick_profile_is_supported(self):
+        model = self.root / "usr/trimui/bin/MainUI"
+        model.write_text("Trimui Brick\n")
+        self.run_action("setup-default")
+        self.assertEqual(self.values()["MIC1 gain volume"], "31")
 
     def test_corrupt_baseline_is_kept_and_not_executed(self):
         state = self.app / "state"

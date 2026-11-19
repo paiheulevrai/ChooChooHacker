@@ -1,4 +1,4 @@
-# ChooChooHacker
+# ChooChoohacker - Microphone activator
 
 <div align="center">
 
@@ -14,6 +14,8 @@
 </div>
 
 > **Experimental, honestly.** Tested on Trimui Smart Pro with NextUI.
+> The default MIC1 setup also targets NextUI tg5040 and tg5050 devices, but
+> those other models have not been physically tested.
 > A working audio stream is not proof of a physically connected onboard mic:
 > the three-second sound test is there to help you check.
 
@@ -54,66 +56,75 @@ not demonstrate a successful acoustic recording. No recorded sound is published.
 
 | Console / environment | Current status |
 | --- | --- |
-| **Trimui Smart Pro / NextUI tg5040 / A133 / Linux 4.9.191** | Tested automatic MIC1 profile; capture/playback path and persistent activation verified on the test unit |
+| **NextUI tg5040 / tg5050** | Default MIC1 route on first launch and every boot; physically tested only on Trimui Smart Pro (tg5040) |
 | RG353V | Planned testing; no automatic microphone profile yet |
 | Other Linux handhelds | Diagnostics and explicit input exploration; no automatic mixer patch |
 | PortMaster package | Experimental launcher/package; not hardware-tested |
 
 The app does not add a microphone where none is wired, and a mixer control
-named "MIC" does not establish that one exists. Automatic writes are deliberately
-limited to the tested Smart Pro profile; unknown models are not guessed.
+named "MIC" does not establish that one exists. Automatic writes are limited to
+known TrimUI models under NextUI tg5040/tg5050 and require the expected mixer
+controls. Other models remain read-only/manual.
 
 ## Install
 
-### NextUI / Trimui Smart Pro
+### NextUI / Trimui Brick, Brick Pro, Smart Pro and Smart Pro S
 
 1. Download **`ChooChooHacker.pak.zip`** from the
    [latest release](https://github.com/paiheulevrai/ChooChooHacker/releases/latest).
    Choose the release asset, not GitHub's "Source code" ZIP.
-2. Extract it. You should get a folder named **`ChooChooHacker.pak`**.
-3. Copy that entire folder to **`Tools/tg5040/`** on your SD card.
+2. Create a folder named **`ChooChoohacker - Microphone activator.pak`** under
+   `Tools/tg5040/` or `Tools/tg5050/`, depending on your NextUI device.
+3. Extract the ZIP contents into that folder.
 4. Safely eject the card, put it back in the console and open NextUI's
-   **Tools > ChooChooHacker**.
+   **Tools > ChooChoohacker - Microphone activator**.
 
-The resulting layout is:
+The resulting layout for tg5040 is:
 
 ```text
 SDCARD/
   Tools/
     tg5040/
-      ChooChooHacker.pak/
+      ChooChoohacker - Microphone activator.pak/
         launch.sh
         choochoohacker.aarch64
         control.sh
         ...
 ```
 
-Do not nest an extra `ChooChooHacker.pak` folder inside the first one.
+For tg5050, use
+`Tools/tg5050/ChooChoohacker - Microphone activator.pak/` instead.
 
 ### Updating or uninstalling
 
-- **Update:** close the app first, replace its program files, and **keep the
-  existing `state/` folder**. It contains the original mixer settings.
+- **Update from the old name:** install this Pak beside `ChooChooHacker.pak`
+  and launch it once. It copies the saved mixer state and updates its boot hook;
+  after checking MIC STATUS and persistence, you can remove the old folder.
+  Keep both state folders until the new app is verified.
+- **Later updates:** close the app first, replace its program files, and
+  **keep the existing `state/` folder**. It contains the original mixer settings.
 - **Uninstall or move:** if Keep after restart is Yes, switch it to No first.
   If you used temporary settings, restart the console once so its reset hook
   can finish. You can then remove/move the application folder.
 - Never delete `state/` or the boot hook as a shortcut to undo changes.
 
-The optional PortMaster download is for advanced testing; the NextUI `.pak`
-is the documented installation path.
+The first launch enables the supported internal MIC1 route and installs a
+NextUI boot hook. It does not record audio; the hook reapplies the chosen route
+after each restart.
 
 ## First use
 
 ### Use the mic in another app
 
-1. Open ChooChooHacker and check **MIC STATUS**.
-2. Select **Enable mic**, press **A**, then confirm.
-3. If you want it available after every reboot, set **Keep after restart: Yes**.
-4. Exit with **B** or **Start**, then open your recording/music app.
+1. Open ChooChooHacker once. On supported NextUI devices, it enables MIC1 and
+   sets **Keep after restart: Yes** automatically.
+2. Check **MIC STATUS**, then exit with **B** or **Start** and open your
+   recording/music app.
 
 The setting stays in place when ChooChooHacker closes. You do not need to leave
-it running in the background. With persistence enabled, you also do not need
-to reopen it after every restart.
+it running in the background or reopen it after each restart. The default setup
+is applied the first time you open the app; if you previously changed or
+persisted a mic setting, that choice is preserved.
 
 ### Check the sound
 
@@ -177,19 +188,22 @@ The original boost, gain and both ADC values are saved **before the first write*
 Enabling uses boost on, gain 31, ADC 160,160; disabling uses boost off, gain 0,
 leaving ADC levels unchanged. Speaker volume is never changed.
 
-- **Keep after restart: No:** the setting survives closing the app, so another
-  app can use it. At the next NextUI boot a one-shot hook restores the exact
-  original values, then removes itself. CLI `restore` undoes it immediately.
+- **Keep after restart: No:** a temporary setting survives closing the app.
+  At the next NextUI boot a one-shot hook restores the exact original values,
+  then removes itself. CLI `restore` undoes it immediately. If you turn off
+  persistence after the first-launch default, ChooChooHacker will not turn it
+  back on automatically.
 - **Keep after restart: Yes:** a permanent SD-card hook reapplies the chosen
-  **on or off** state on every NextUI boot. It does not self-delete.
+  **on or off** state on every NextUI boot. The initial default is **on**. It
+  does not self-delete.
 - Switching Keep after restart off restores the original values and removes
   the app-owned hook. Do this before removing or moving the app.
 
-Only `.userdata/tg5040/.hooks/boot.d/90-choochoohacker.sh` is installed.
-Existing `auto.sh`, root filesystem and other tools' hooks are not changed.
-Failed changes attempt rollback; failed restores retain recovery snapshots and
-report an error. Do not edit the same controls in another app while patched.
-Do not delete `state/` as a way to undo changes.
+Only `.userdata/<tg5040|tg5050>/.hooks/boot.d/90-choochoohacker.sh` is
+installed. Existing `auto.sh`, root filesystem and other tools' hooks are not
+changed. Failed changes attempt rollback; failed restores retain recovery
+snapshots and report an error. Do not edit the same controls in another app
+while patched. Do not delete `state/` as a way to undo changes.
 
 Enabling a route cannot fix another app's ALSA PCM-opening bug. ChooChooTracker's
 Smart Pro capture failure is tracked in
@@ -235,7 +249,7 @@ hardware capabilities while discarding its one-second capture to `/dev/null`.
 An SDL probe checks the format used by Test. Results go to `discovery.log`;
 the first usable input is selected for Test for this app session only.
 B stops Discovery. Stream success is **not** acoustic mic identification.
-On a supported Smart Pro, use Enable first if its input is disabled.
+On a supported TrimUI, use Enable first if its input is disabled.
 
 **Info > Y Explore > Try input controls** is for manual experiments, including unknown consoles.
 Only writable boolean, integer or enumerated input/mic/capture/ADC controls are
@@ -262,7 +276,7 @@ automatically swept. Unknown hardware is never enabled automatically.
 | What you see | What to try |
 | --- | --- |
 | **Not found** or **Unknown** | Open Info and refresh. Export a report; this is not an invitation to install random drivers. |
-| **Found, inactive** | On the supported Smart Pro profile, choose Enable mic. |
+| **Found, inactive** | On a supported TrimUI profile, choose Enable mic. |
 | **Enabled**, but silence/noise | Run the three-second acoustic test. Routing enabled does not prove a physical mic exists. |
 | Another app sees `audiocodec` but cannot arm it | That app may need to open the raw named PCM; see the linked tracker issue below. |
 | Setting disappears after reboot | Check Keep after restart. No intentionally restores the original values at the next boot. |
@@ -280,7 +294,7 @@ the temporary restoration hook is one-shot.
 
 **Can I test another console?** Export Info first. Discover inputs probes capture
 inputs; Info > Explore offers carefully limited manual input controls. Neither
-silently applies the Smart Pro patch to another model. Share your report and
+silently applies the MIC1 patch to unsupported models. Share your report and
 observations; do not assume matching control names mean matching hardware.
 
 ## CLI for other apps
@@ -345,7 +359,8 @@ three-second stopping, waveform bounds and offscreen navigation.
 `--self-test` checks navigation without hardware writes/capture.
 `--smoke-test /tmp/chh` renders main, Info and synthetic popup BMPs, reading
 diagnostics without capturing. These checks do not replace physical-button or
-acoustic testing. Runtime output goes to `ChooChooHacker.log`, hooks to `boot.log`.
+acoustic testing. runtime output goes to `ChooChooHacker.log`, default mic setup to
+`mic-default.log`, and temporary-reset hooks to `boot.log`.
 
 ## Contributing and support
 
