@@ -121,6 +121,89 @@ class MixerTests(unittest.TestCase):
         (self.root / "usr/trimui/bin/MainUI").write_text(model + "\n")
         self.hook = self.root / f"mnt/SDCARD/.userdata/{profile}/.hooks/boot.d/90-choochoohacker.sh"
 
+    def prepare_usb_gadget(self):
+        usb_audio = self.app / "usb-audio"
+        usb_audio.mkdir()
+        (usb_audio / "u_audio.ko").write_bytes(b"test helper module")
+        (usb_audio / "usb_f_uac1.ko").write_bytes(b"test UAC1 module")
+        root = self.root
+        config = root / "sys/kernel/config/usb_gadget/g1/configs/c.1"
+        functions = root / "sys/kernel/config/usb_gadget/g1/functions"
+        ffs = functions / "ffs.adb"
+        uac1 = functions / "uac1.usb0"
+        udc = root / "sys/kernel/config/usb_gadget/g1/UDC"
+        state = root / "sys/class/udc/5100000.udc-controller/state"
+        role = root / "sys/devices/platform/soc/usbc0/otg_role"
+        cards = root / "proc/asound/cards"
+        modules = root / "proc/modules"
+        for path in (config, ffs, uac1, state.parent, role.parent, cards.parent):
+            path.mkdir(parents=True, exist_ok=True)
+        (config / "ffs.adb").symlink_to(ffs, target_is_directory=True)
+        udc.write_text("5100000.udc-controller\n")
+        state.write_text("configured\n")
+        role.write_text("usb_device\n")
+        modules.write_text("snd 123 0 - Live 0\n")
+        self.env.update(
+            FAKE_USB_LOG=str(self.base / "usb-actions"),
+            FAKE_USB_CONFIG=str(config),
+            FAKE_USB_FFS=str(ffs),
+            FAKE_USB_UAC1=str(uac1),
+            FAKE_USB_UDC=str(udc),
+            FAKE_USB_STATE=str(state),
+            FAKE_USB_CARDS=str(cards),
+            FAKE_MODULES=str(modules),
+        )
+        fake_insmod = self.base / "bin/insmod"
+        fake_insmod.write_text(
+            "#!/bin/sh\n"
+            "name=$(basename \"$1\" .ko)\n"
+            "printf '%s 123 0 - Live 0\\n' \"$name\" >> \"$FAKE_MODULES\"\n"
+            "printf 'insmod=%s\\n' \"$name\" >> \"$FAKE_USB_LOG\"\n"
+        )
+        fake_insmod.chmod(0o755)
+        fake_sleep = self.base / "bin/sleep"
+        fake_sleep.write_text(
+            "#!/bin/sh\n"
+            "[ ! -e \"$FAKE_USB_DELAY_ENUMERATION\" ] || echo configured > \"$FAKE_USB_STATE\"\n"
+        )
+        fake_sleep.chmod(0o755)
+        self.env["FAKE_USB_DELAY_ENUMERATION"] = str(self.base / "delay-usb-enumeration")
+        adbd = root / "etc/init.d/adbd"
+        adbd.parent.mkdir(parents=True, exist_ok=True)
+        adbd.write_text(
+            "#!/bin/sh\n"
+            "printf 'adbd:%s\\n' \"$1\" >> \"$FAKE_USB_LOG\"\n"
+            "case \"$1\" in\n"
+            "  stop) : ;;\n"
+            "  start) [ ! -e \"$FAKE_USB_FAIL_ADBD_START\" ] || exit 8; "
+            "rm -f \"$FAKE_USB_CONFIG/ffs.adb\" \"$FAKE_USB_CONFIG/uac1.usb0\"; "
+            "ln -s \"$FAKE_USB_FFS\" \"$FAKE_USB_CONFIG/ffs.adb\"; "
+            "printf '5100000.udc-controller\\n' > \"$FAKE_USB_UDC\"; "
+            "echo configured > \"$FAKE_USB_STATE\" ;;\n"
+            "  *) exit 2 ;;\n"
+            "esac\n"
+        )
+        adbd.chmod(0o755)
+        self.env["FAKE_USB_FAIL_ADBD_START"] = str(self.base / "fail-adbd-start")
+        helper = root / "bin/setusbconfig"
+        helper.parent.mkdir(parents=True, exist_ok=True)
+        helper.write_text(
+            "#!/bin/sh\n"
+            "printf 'setusbconfig:%s\\n' \"$1\" >> \"$FAKE_USB_LOG\"\n"
+            "[ \"$1\" = uac1 ] || exit 2\n"
+            "[ ! -e \"$FAKE_USB_FAIL_HELPER\" ] || exit 7\n"
+            "[ -n \"$(cat \"$FAKE_USB_UDC\")\" ] || exit 9\n"
+            "rm -f \"$FAKE_USB_CONFIG/ffs.adb\" \"$FAKE_USB_CONFIG/uac1.usb0\"\n"
+            "ln -s \"$FAKE_USB_UAC1\" \"$FAKE_USB_CONFIG/uac1.usb0\"\n"
+            "printf '5100000.udc-controller\\n' > \"$FAKE_USB_UDC\"\n"
+            "if [ -e \"$FAKE_USB_DELAY_ENUMERATION\" ]; then "
+            "echo 'not attached' > \"$FAKE_USB_STATE\"; "
+            "else echo configured > \"$FAKE_USB_STATE\"; fi\n"
+            "echo '1 [UAC1Gadget]: UAC1_Gadget' >> \"$FAKE_USB_CARDS\"\n"
+        )
+        helper.chmod(0o755)
+        self.env["FAKE_USB_FAIL_HELPER"] = str(self.base / "fail-helper")
+
     def run_cli(self, *args, code=0):
         executable = self.app / "choochoohacker"
         if not executable.exists():
@@ -405,6 +488,78 @@ class MixerTests(unittest.TestCase):
         self.assertEqual(self.values(), CONTROLS)
         self.assertFalse(self.log.exists())
         self.assertFalse((self.app / "state").exists())
+
+    def test_usb_audio_preflight_blocks_known_smart_pro_kernel_without_mutating_state(self):
+        modules = self.root / "proc/modules"
+        modules.write_text("snd 123 0 - Live 0\n")
+        adbd = self.root / "etc/init.d/adbd"
+        adbd.parent.mkdir(parents=True, exist_ok=True)
+        adbd.write_text("#!/bin/sh\n")
+        result = self.run_cli("diagnostics")
+        self.assertIn("USB_AUDIO_STATUS=unavailable", result.stdout)
+        self.assertIn("USB_AUDIO_MODE=experimental-UAC1-IN-only", result.stdout)
+        self.assertIn("USB_AUDIO_UAC2=blocked", result.stdout)
+        self.assertIn("USB_AUDIO_REASON=UAC2 binding caused a kernel error on this Smart Pro.", result.stdout)
+        self.assertIn("USB_AUDIO_UAC1_MODULES=missing", result.stdout)
+        self.assertIn("USB_AUDIO_UAC1_FUNCTION=absent", result.stdout)
+        self.assertIn("USB_AUDIO_ADB_RECOVERY=unavailable", result.stdout)
+        self.assertEqual(self.values(), CONTROLS)
+        self.assertFalse(self.log.exists())
+
+    def test_usb_audio_in_starts_only_on_supported_smart_pro_and_restores_adb(self):
+        self.prepare_usb_gadget()
+        status = self.run_action("status")
+        self.assertIn("USB_AUDIO_STATE=available", status.stdout)
+        started = self.run_action("usb-audio-on")
+        self.assertIn("Experimental USB audio IN is active", started.stdout)
+        self.assertIn("USB_AUDIO_STATE=active", self.run_action("status").stdout)
+        self.assertIn("adbd:stop", (self.base / "usb-actions").read_text())
+        self.assertIn("setusbconfig:uac1", (self.base / "usb-actions").read_text())
+        self.assertTrue((self.app / "state").exists())
+        self.run_action("usb-audio-off")
+        self.assertIn("USB_AUDIO_STATE=available", self.run_action("status").stdout)
+        self.assertIn("adbd:start", (self.base / "usb-actions").read_text())
+        self.assertFalse((self.root / "tmp/choochoohacker-uac1").exists())
+
+    def test_usb_audio_waits_for_host_enumeration_after_rebinding(self):
+        self.prepare_usb_gadget()
+        Path(self.env["FAKE_USB_DELAY_ENUMERATION"]).touch()
+        started = self.run_action("usb-audio-on")
+        self.assertIn("Experimental USB audio IN is active", started.stdout)
+        self.assertIn("USB_AUDIO_STATE=active", self.run_action("status").stdout)
+
+    def test_usb_audio_start_failure_restores_adb_and_keeps_no_active_marker(self):
+        self.prepare_usb_gadget()
+        (self.base / "fail-helper").write_text("fail")
+        result = self.run_action("usb-audio-on", success=False)
+        self.assertIn("UAC1 did not bind; restoring ADB.", result.stderr)
+        self.assertTrue((self.root / "sys/kernel/config/usb_gadget/g1/configs/c.1/ffs.adb").is_symlink())
+        self.assertIn("USB_AUDIO_STATE=available", self.run_action("status").stdout)
+        self.assertFalse((self.root / "tmp/choochoohacker-uac1").exists())
+
+    def test_usb_audio_rejects_another_trimui_model_before_loading_modules(self):
+        self.prepare_usb_gadget()
+        (self.root / "usr/trimui/bin/MainUI").write_text("Trimui Brick\n")
+        result = self.run_action("usb-audio-on", success=False)
+        self.assertIn("only available on the tested Smart Pro firmware", result.stderr)
+        self.assertFalse((self.base / "usb-actions").exists())
+
+    def test_usb_audio_keeps_recovery_marker_when_adb_restore_fails(self):
+        self.prepare_usb_gadget()
+        self.run_action("usb-audio-on")
+        (self.base / "fail-adbd-start").write_text("fail")
+        result = self.run_action("usb-audio-off", success=False)
+        self.assertIn("Could not restore ADB", result.stderr)
+        self.assertTrue((self.root / "tmp/choochoohacker-uac1").exists())
+        (self.base / "fail-adbd-start").unlink()
+        self.run_action("usb-audio-off")
+        self.assertTrue((self.root / "sys/kernel/config/usb_gadget/g1/configs/c.1/ffs.adb").is_symlink())
+
+    def test_usb_audio_cli_actions_work_without_initializing_the_display(self):
+        self.prepare_usb_gadget()
+        self.run_cli("usb-audio-on")
+        self.run_cli("usb-audio-off")
+        self.assertIn("adbd:start", (self.base / "usb-actions").read_text())
 
     def test_discovery_uses_named_inputs_reports_failures_and_never_changes_mixers(self):
         extra = self.root / "proc/asound/card0/pcm1c/info"

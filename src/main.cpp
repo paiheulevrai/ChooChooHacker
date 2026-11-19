@@ -81,6 +81,8 @@ static void usage(std::ostream& out) {
         << "  controls     List safely editable ALSA input controls.\n"
         << "  experiment-set CARD NUMID VALUES  Change input temporarily.\n"
         << "  experiment-restore               Undo all input experiments.\n"
+        << "  usb-audio-on  Start experimental USB audio IN (Smart Pro only).\n"
+        << "  usb-audio-off Stop USB audio and restore ADB.\n"
         << "  --help       Show this help.\n\n"
         << "Diagnostics: --smoke-test PREFIX, --self-test, --probe-input\n"
         << "Capture probes: --probe-input or --probe-device hw:CARD=ID,DEV=N.\n"
@@ -376,13 +378,21 @@ class App {
         screen.text(40, 150 + row * 24, str, color, 1, 60);
     }
     void menu(int row, const std::string& label) {
-        const int y = 202 + row * 42;
+        const int y = 191 + row * 35;
         if (row == selected) screen.rect(32, y - 9, 736, 36, selection);
         screen.text(48, y, row == selected ? ">" : " ", gold);
         screen.text(80, y, label, row == selected ? gold : white, 1, 55);
     }
     bool persistent() const { return get("PERSIST") == "enabled"; }
     bool enabled() const { return get("MIC_STATE") == "on"; }
+    bool usbAudioAvailable() const {
+        return get("USB_AUDIO_STATE") == "available" ||
+            get("USB_AUDIO_STATE") == "active" || get("USB_AUDIO_STATE") == "recovery-needed";
+    }
+    bool usbAudioActive() const {
+        return get("USB_AUDIO_STATE") == "active" || get("USB_AUDIO_STATE") == "recovery-needed";
+    }
+    int mainMenuCount() const { return usbAudioAvailable() ? 6 : 5; }
     void setReport(const std::string& text) {
         reportLines.clear();
         std::istringstream input(text);
@@ -490,7 +500,10 @@ public:
             worker.join(); busy = false;
             std::cout << job << " [" << reply.code << "]\n" << reply.output << std::flush;
             if (job == "status") {
-                if (reply.code == 0) info = parse(reply.output);
+                if (reply.code == 0) {
+                    info = parse(reply.output);
+                    selected = std::min(selected, mainMenuCount() - 1);
+                }
                 else notice = "Could not read the device settings. Try Refresh in Info.";
                 refreshed = SDL_GetTicks();
             } else if (job == "diagnostics") {
@@ -527,6 +540,12 @@ public:
                     closingExperiments = false;
                     notice = "Could not restore every input. Keep the device connected.";
                 }
+            } else if (job == "usb-audio-on" || job == "usb-audio-off") {
+                notice = reply.code == 0 ?
+                    (job == "usb-audio-on" ? "USB audio IN is on. ADB is off until you stop or restart." :
+                        "USB audio is off. ADB is restored.") :
+                    "Could not switch USB audio. See Info.";
+                if (running) start("status");
             } else {
                 if (reply.code != 0) {
                     notice = "Could not change the mic settings. Open Info for details.";
@@ -586,7 +605,7 @@ public:
             return;
         }
         if (page == 1) {
-            if (key == Key::cancel) { page = 0; selected = 4; needReport = false; }
+            if (key == Key::cancel) { page = 0; selected = mainMenuCount() - 1; needReport = false; }
             else if (key == Key::up) infoOffset = std::max(0, infoOffset - 1);
             else if (key == Key::down) infoOffset = std::min(std::max(0, static_cast<int>(reportLines.size()) - 10), infoOffset + 1);
             else if (key == Key::left) infoOffset = std::max(0, infoOffset - 10);
@@ -625,13 +644,15 @@ public:
             return;
         }
         switch (key) {
-            case Key::up: selected = (selected + 4) % 5; break;
-            case Key::down: selected = (selected + 1) % 5; break;
+            case Key::up: selected = (selected + mainMenuCount() - 1) % mainMenuCount(); break;
+            case Key::down: selected = (selected + 1) % mainMenuCount(); break;
             case Key::accept:
                 if (selected == 0) confirm = enabled() ? "mic-off" : "mic-on";
                 else if (selected == 1) confirm = persistent() ? "persist-off" : "persist-on";
                 else if (selected == 2) confirm = "audio-test";
                 else if (selected == 3) confirm = "discover";
+                else if (usbAudioAvailable() && selected == 4)
+                    confirm = usbAudioActive() ? "usb-audio-off" : "usb-audio-on";
                 else { page = 1; needReport = true; }
                 break;
             case Key::refresh: start("status"); break;
@@ -658,7 +679,10 @@ public:
                 get("PERSIST") == "disabled" ? "No" : "Unknown"));
             menu(2, "Test");
             menu(3, "Discover inputs");
-            menu(4, "Info");
+            if (usbAudioAvailable()) {
+                menu(4, usbAudioActive() ? "Stop USB audio" : "Test USB audio IN");
+                menu(5, "Info");
+            } else menu(4, "Info");
         } else if (page == 1) {
             screen.text(40, 108, "Info / Audio + MIDI", gold);
             if (reportLines.empty()) line(0, "Loading...", muted);
@@ -721,6 +745,10 @@ public:
                     confirm == "experiment-restore" ? "Undo all input experiments?" :
                     confirm == "audio-test" ?
                     "Record 3 seconds and play it back? Keep volume low." :
+                    confirm == "usb-audio-on" ?
+                    "Test USB audio IN? ADB is off until you stop it or restart." :
+                    confirm == "usb-audio-off" ?
+                    "Stop USB audio and restore ADB now?" :
                     confirm == "mic-on" ?
                     "Enable the mic?" :
                     confirm == "mic-off" ? "Disable the mic?" :
@@ -784,7 +812,18 @@ public:
         page = 0;
         takePhase = TakePhase::recording;
         input(Key::cancel);
-        return !busy && confirm.empty() && !audio.listening() && takePhase == TakePhase::closed;
+        if (busy || !confirm.empty() || audio.listening() || takePhase != TakePhase::closed) return false;
+        info["USB_AUDIO_STATE"] = "available";
+        selected = 0;
+        for (int i = 0; i < 4; ++i) input(Key::down);
+        input(Key::accept);
+        if (confirm != "usb-audio-on") return false;
+        input(Key::cancel);
+        info["USB_AUDIO_STATE"] = "active";
+        input(Key::accept);
+        if (confirm != "usb-audio-off") return false;
+        input(Key::cancel);
+        return true;
     }
     bool previews(const std::string& prefix) {
         auto save = [&](const std::string& suffix) {
@@ -793,6 +832,7 @@ public:
             SDL_RenderPresent(screen.renderer);
             return ok;
         };
+        info["USB_AUDIO_STATE"] = "available";
         page = 0; selected = 0;
         if (!save("-main")) return false;
         page = 1;
@@ -825,9 +865,9 @@ int main(int argc, char** argv) {
         usage(std::cout);
         return 0;
     }
-    const std::array<const char*, 12> cliActions{{
+    const std::array<const char*, 14> cliActions{{
         "status", "mic-on", "mic-off", "restore", "persist-on", "persist-off", "diagnostics", "export-log",
-        "inputs", "discover", "controls", "experiment-restore"}};
+        "inputs", "discover", "controls", "experiment-restore", "usb-audio-on", "usb-audio-off"}};
     if (argc == 2 && std::find(cliActions.begin(), cliActions.end(), command) != cliActions.end()) {
         if (!locateBackend()) return 1;
         execControl(command);

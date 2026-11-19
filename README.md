@@ -1,25 +1,31 @@
-# ChooChoohacker - Microphone activator
+# ChooChooHacker // MIC & USB AUDIO
 
 <div align="center">
 
-**Hacker tool to activate the microphone in your handheld console**
+```text
+ .------------------------------------------------------.
+ |   C H O O C H O O H A C K E R   //   DUBWISE CREW   |
+ |   [ MIC PATCH ]    [ USB AUDIO IN ]    [ PRESS A ]   |
+ '------------------------------------------------------'
+           * PIRATE RADIO / POCKET CONSOLE EDITION *
+```
+
+**Wake up the mic. Feed PC audio into your handheld.**
 
 
 [**Download the NextUI .pak**](https://github.com/paiheulevrai/ChooChooHacker/releases/latest)
 &nbsp; | &nbsp;
 [Report a problem / suggest a console](https://github.com/paiheulevrai/ChooChooHacker/issues)
 
-![ChooChooHacker main screen, with microphone status and five actions](docs/screenshots/main.png)
+![ChooChooHacker main screen, with microphone status and a USB audio test option](docs/screenshots/main.png)
 
 </div>
 
-> **Experimental, honestly.** Tested on Trimui Smart Pro with NextUI.
-> The default MIC1 setup also targets NextUI tg5040 and tg5050 devices, but
-> those other models have not been physically tested.
-> A working audio stream is not proof of a physically connected onboard mic:
-> the three-second sound test is there to help you check.
+> **FIELD REPORT // SMART PRO + NEXTUI:** Windows → USB → ChooChooTracker
+> worked on the test console. USB audio IN is still experimental and Smart Pro
+> only. Other supported mic profiles need hardware testers.
 
-## What it does
+## 00 // The patch
 
 | You want to... | Open... |
 | --- | --- |
@@ -29,14 +35,16 @@
 | Check what the input actually hears | **Test** |
 | Troubleshoot audio or MIDI | **Info**, then export a diagnostic |
 | Find and test another audio input | **Discover inputs**, on the main screen |
+| Try USB audio from a host device | **Test USB audio IN**, Smart Pro only |
 | Experiment with input mixer settings | **Info > Explore** |
 | Control it from another application | The [public CLI](#cli-for-other-apps) |
 
 No background recording, telemetry or network access. No tracker modification.
 The normal screen stays small; the technical details stay in Info.
 
-[Install](#install) | [First use](#first-use) | [Screenshots](#screenshots) |
-[Compatibility](#compatibility) | [Troubleshooting](#troubleshooting) |
+[01 Screenshots](#screenshots) | [02 Compatibility](#compatibility) |
+[03 Install](#install) | [04 First use](#first-use) |
+[Troubleshooting](#troubleshooting) |
 [CLI](#cli-for-other-apps) | [Build](#build-and-verification)
 
 ## Screenshots
@@ -57,6 +65,7 @@ not demonstrate a successful acoustic recording. No recorded sound is published.
 | Console / environment | Current status |
 | --- | --- |
 | **NextUI tg5040 / tg5050** | Default MIC1 route on first launch and every boot; physically tested only on Trimui Smart Pro (tg5040) |
+| **Smart Pro USB audio IN** | Experimental UAC1 on kernel 4.9.191; Windows → ChooChooTracker verified on one console |
 | RG353V | Planned testing; no automatic microphone profile yet |
 | Other Linux handhelds | Diagnostics and explicit input exploration; no automatic mixer patch |
 | PortMaster package | Experimental launcher/package; not hardware-tested |
@@ -146,6 +155,21 @@ restart to No; this restores the values from before your first change.
 Disable controls the known internal MIC1 input route, not every USB input and
 not a hardware privacy switch.
 
+### Try USB audio IN (experimental)
+
+This test is limited to the Trimui Smart Pro running kernel 4.9.191.
+Connect its USB-C device port to a host, select **Test USB audio IN**, and
+confirm. On Windows, send sound to **Speakers (AC Interface)**; in
+ChooChooTracker, arm **UAC1_Gadget** as an input. PC-to-console audio was
+confirmed on one Smart Pro. If the Tracker's **Default** output goes silent,
+use a Tracker build with the NextUI USB playback fix and relaunch it while USB
+audio is active. UAC2 and USB audio OUT are not offered.
+
+USB ADB is unavailable while USB audio is active. Select **Stop USB audio** to
+restore ADB, or restart the console to return to its startup USB mode. Wi-Fi SSH
+is unaffected. Exiting ChooChooHacker leaves USB audio active so another app can
+use it.
+
 ### Send a useful bug report
 
 Open **Info**, press **A** to export, then copy the resulting text file from
@@ -165,6 +189,8 @@ automatically.
   automatic replay at 25% digital level. Keep physical speaker volume low.
 - **Discover inputs:** look for usable audio inputs directly from the main
   screen, without waiting for Info to load. Capture starts only after confirmation.
+- **Test USB audio IN:** experimentally switches the Smart Pro's USB gadget to
+  UAC1. ADB is restored by **Stop USB audio** or by restarting the console.
 - **Info:** scroll the audio/MIDI diagnostic report, export it or open Explore.
 
 Up/Down selects; physical A confirms; B cancels or goes back; Start exits.
@@ -226,6 +252,12 @@ Reads are bounded (8 cards, 16 PCM devices/card, file sections 8 KB, command
 sections 32 KB, per-command timeout 3 seconds). The screen shows up to 32 KB;
 export contains the complete report within those per-section limits.
 
+The diagnostic reports USB-audio state and preflight. On the tested Smart Pro
+(kernel 4.9.191), standard UAC2 binding caused a kernel error. The app bundles
+GPLv2 UAC1 modules for an experimental IN-only test; UAC2 and OUT are not
+offered. Module source, build configuration and licensing are in
+[`usb-audio/`](usb-audio/).
+
 A on Info exports `diagnostics/diagnostic-YYYYMMDD-HHMMSS-PID.txt` beside the app.
 No environment dump, network configuration, recordings, credentials or dedicated
 serial-number files are collected. Serial fields in file sections are filtered.
@@ -268,8 +300,8 @@ keeps snapshots for inspection; a crash/power loss is not guaranteed to undo
 OS-saved mixer state. Boot hooks still apply the normal supported MIC1 setting
 and warn about pending manual snapshots.
 
-No modules are loaded, USB roles changed, arbitrary commands executed or gains
-automatically swept. Unknown hardware is never enabled automatically.
+Explore does not load modules, change USB roles, execute arbitrary commands
+or sweep gains. Unknown hardware is never enabled automatically.
 
 ## Troubleshooting
 
@@ -317,11 +349,14 @@ APP=/mnt/SDCARD/Tools/tg5040/ChooChooHacker.pak/choochoohacker.aarch64
 "$APP" controls
 "$APP" experiment-set audiocodec 2 7
 "$APP" experiment-restore
+"$APP" usb-audio-on
+"$APP" usb-audio-off
 ```
 
 Do not copy the example control number blindly: use `controls` first.
 `status` prints `KEY=VALUE` lines including `MIC_STATE=on|off|inactive|unavailable`,
 `PERSIST=enabled|disabled` (or an explicit error), `BASELINE` and `TEMPORARY`.
+`USB_AUDIO_STATE` is `available`, `active`, `recovery-needed` or `unavailable`.
 `export-log` prints `REPORT=absolute-path`. `inputs` prints named PCMs.
 `controls` prints `CONTROL_N=CARD|NUMID|NAME|TYPE|MIN|MAX|CHANNELS|VALUES`.
 Experiment values are exact ALSA CSV (boolean `on/off`, integer/enum numeric).
@@ -353,8 +388,9 @@ unzip -t releases/choochoohacker-portmaster.zip
 
 Tests cover fake mixer rollback/restoration, temporary and persistent on/off,
 CLI from an unrelated directory without a display, diagnostic export, discovery,
-input experiment validation/recovery, SDL dummy record/replay and exact
-three-second stopping, waveform bounds and offscreen navigation.
+input experiment validation/recovery, USB audio hardware gating and ADB recovery,
+SDL dummy record/replay and exact three-second stopping, waveform bounds and
+offscreen navigation.
 
 `--self-test` checks navigation without hardware writes/capture.
 `--smoke-test /tmp/chh` renders main, Info and synthetic popup BMPs, reading

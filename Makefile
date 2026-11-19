@@ -37,10 +37,12 @@ package: $(TARGET)
 	cp $(TARGET) control.sh build/ChooChooHacker.pak/
 	cp packaging/launch.sh build/ChooChooHacker.pak/
 	cp LICENSE build/ChooChooHacker.pak/licenses/
+	cp usb-audio/source/COPYING build/ChooChooHacker.pak/licenses/GPL-2.0-UAC1.txt
 	cp LICENSE build/ChooChooHacker.pak/
 	cp README.md build/ChooChooHacker.pak/
 	cp pak.json build/ChooChooHacker.pak/
 	cp -r docs build/ChooChooHacker.pak/
+	cp -r usb-audio build/ChooChooHacker.pak/
 	chmod +x build/ChooChooHacker.pak/launch.sh build/ChooChooHacker.pak/control.sh
 	cd build/ChooChooHacker.pak && zip -qr -FS ../../releases/ChooChooHacker.pak.zip .
 	cp -r build/ChooChooHacker.pak/. build/portmaster/choochoohacker/

@@ -8,6 +8,7 @@ BASELINE="$STATE/mic-baseline"
 TARGET_STATE="$STATE/mic-target"
 DEFAULT_CONFIGURED="$STATE/mic-default-configured"
 EXPERIMENTS="$STATE/experiments"
+USB_AUDIO_MARKER="$R/tmp/choochoohacker-uac1"
 PLATFORM=${PLATFORM:-}
 case "$PLATFORM" in
     tg5040|tg5050) ;;
@@ -227,6 +228,7 @@ status() {
         printf 'UDC=%s\n' "$(ls "$R/sys/class/udc" | tr '\n' ' ')"
     else printf 'UDC=unavailable\n'; fi
     printf 'USB_ROLE=%s\n' "$(read_file "$R/sys/devices/platform/soc/usbc0/otg_role")"
+    printf 'USB_AUDIO_STATE=%s\n' "$(usb_audio_state)"
 }
 
 report_file() {
@@ -250,10 +252,130 @@ report_tool() {
         printf '\n[Section limited to 32768 bytes.]\n'
     else printf 'Unavailable: command not installed.\n'; fi
 }
+usb_audio_uac1_link() {
+    [ -L "$R/sys/kernel/config/usb_gadget/g1/configs/c.1/uac1.usb0" ]
+}
+usb_audio_adb_link() {
+    [ -L "$R/sys/kernel/config/usb_gadget/g1/configs/c.1/ffs.adb" ]
+}
+usb_audio_gadget_state() {
+    tr -d ' \t\r\n' < "$R/sys/class/udc/5100000.udc-controller/state" 2>/dev/null
+}
+usb_audio_bound() {
+    [ "$(tr -d ' \t\r\n' < "$R/sys/kernel/config/usb_gadget/g1/UDC" 2>/dev/null)" = '5100000.udc-controller' ] &&
+        [ "$(usb_audio_gadget_state)" = configured ]
+}
+usb_audio_active() {
+    usb_audio_uac1_link && usb_audio_bound
+}
+usb_audio_supported() {
+    [ "$(model):$(tr -d ' \t\r\n' < "$R/proc/sys/kernel/osrelease" 2>/dev/null)" = 'Trimui Smart Pro:4.9.191' ] &&
+        [ -r "$HOME_DIR/usb-audio/u_audio.ko" ] &&
+        [ -r "$HOME_DIR/usb-audio/usb_f_uac1.ko" ] &&
+        [ -x "$R/bin/setusbconfig" ] &&
+        [ -x "$R/etc/init.d/adbd" ] &&
+        [ -d "$R/sys/kernel/config/usb_gadget/g1/functions" ] &&
+        [ -d "$R/sys/kernel/config/usb_gadget/g1/configs/c.1" ] &&
+        [ -d "$R/sys/class/udc/5100000.udc-controller" ] &&
+        [ "$(tr -d ' \t\r\n' < "$R/sys/devices/platform/soc/usbc0/otg_role" 2>/dev/null)" = usb_device ]
+}
+usb_audio_adb_ready() {
+    usb_audio_adb_link && usb_audio_bound
+}
+usb_audio_state() {
+    if usb_audio_active; then printf 'active'
+    elif [ -e "$USB_AUDIO_MARKER" ]; then printf 'recovery-needed'
+    elif usb_audio_supported && usb_audio_adb_ready; then printf 'available'
+    else printf 'unavailable'; fi
+}
+usb_audio_load_module() {
+    module=$1
+    path=$2
+    [ -r "$R/proc/modules" ] && grep -q "^$module " "$R/proc/modules" && return 0
+    command -v insmod >/dev/null 2>&1 || error 'insmod is unavailable; USB audio was not changed.'
+    insmod "$path" || error "Could not load the USB audio module: $module."
+}
+usb_audio_restore_adb() {
+    "$R/etc/init.d/adbd" start || return 1
+    attempt=0
+    while [ "$attempt" -lt 5 ]; do
+        usb_audio_adb_ready && return 0
+        sleep 1
+        attempt=$((attempt + 1))
+    done
+    return 1
+}
+usb_audio_wait_active() {
+    attempt=0
+    while [ "$attempt" -lt 5 ]; do
+        usb_audio_active && return 0
+        sleep 1 || return 1
+        attempt=$((attempt + 1))
+    done
+    return 1
+}
+usb_audio_on() {
+    usb_audio_supported || error 'USB audio IN is only available on the tested Smart Pro firmware.'
+    if usb_audio_active; then printf 'USB audio IN is already active.\n'; return 0; fi
+    [ "$(usb_audio_state)" = available ] ||
+        error 'The ADB gadget is not ready; USB audio was not changed.'
+    usb_audio_load_module u_audio "$HOME_DIR/usb-audio/u_audio.ko"
+    usb_audio_load_module usb_f_uac1 "$HOME_DIR/usb-audio/usb_f_uac1.ko"
+    mkdir -p "$R/tmp" || error 'Cannot create USB recovery state.'
+    printf 'starting\n' > "$USB_AUDIO_MARKER" || error 'Cannot save USB recovery state.'
+    if ! "$R/etc/init.d/adbd" stop; then
+        printf 'ERROR: Could not stop ADB before switching USB audio.\n' >&2
+        if usb_audio_restore_adb; then rm -f "$USB_AUDIO_MARKER"
+        else printf 'ERROR: ADB recovery failed; restart the console to restore USB.\n' >&2; fi
+        return 1
+    fi
+    if ! "$R/bin/setusbconfig" uac1 || ! usb_audio_wait_active; then
+        printf 'ERROR: UAC1 did not bind; restoring ADB.\n' >&2
+        if usb_audio_restore_adb; then rm -f "$USB_AUDIO_MARKER"
+        else printf 'ERROR: ADB recovery failed; restart the console to restore USB.\n' >&2; fi
+        return 1
+    fi
+    printf 'active\n' > "$USB_AUDIO_MARKER" || error 'USB audio is active but recovery state could not be updated.'
+    printf 'Experimental USB audio IN is active. ADB is off until stopped or the console restarts.\n'
+}
+usb_audio_off() {
+    state=$(usb_audio_state)
+    case "$state" in
+        active|recovery-needed) ;;
+        available) printf 'USB audio IN is already off.\n'; return 0 ;;
+        *) error 'USB gadget state is unknown; restart the console to restore USB safely.' ;;
+    esac
+    usb_audio_restore_adb ||
+        error 'Could not restore ADB. The recovery marker was kept; restart the console to restore USB.'
+    rm -f "$USB_AUDIO_MARKER" || error 'ADB is restored, but the USB recovery marker could not be removed.'
+    printf 'USB audio stopped. ADB is restored.\n'
+}
+usb_audio_preflight() {
+    state=$(usb_audio_state)
+    printf 'USB_AUDIO_STATUS=%s\n' "$state"
+    printf 'USB_AUDIO_MODE=experimental-UAC1-IN-only\n'
+    if [ "$(model):$(tr -d ' \t\r\n' < "$R/proc/sys/kernel/osrelease" 2>/dev/null)" = 'Trimui Smart Pro:4.9.191' ]; then
+        printf 'USB_AUDIO_UAC2=blocked\n'
+        printf 'USB_AUDIO_REASON=UAC2 binding caused a kernel error on this Smart Pro.\n'
+    else
+        printf 'USB_AUDIO_UAC2=not-tested\n'
+    fi
+    if [ -r "$HOME_DIR/usb-audio/u_audio.ko" ] && [ -r "$HOME_DIR/usb-audio/usb_f_uac1.ko" ]; then
+        printf 'USB_AUDIO_UAC1_MODULES=bundled\n'
+    else printf 'USB_AUDIO_UAC1_MODULES=missing\n'; fi
+    if [ -d "$R/sys/kernel/config/usb_gadget/g1/functions/uac1.usb0" ]; then
+        printf 'USB_AUDIO_UAC1_FUNCTION=present\n'
+    else printf 'USB_AUDIO_UAC1_FUNCTION=absent\n'; fi
+    if [ -x "$R/etc/init.d/adbd" ]; then
+        printf 'USB_AUDIO_ADB_RECOVERY=available\n'
+    else printf 'USB_AUDIO_ADB_RECOVERY=unavailable\n'; fi
+}
 diagnostics() {
     printf 'ChooChooHacker diagnostic v2\nRead-only; no audio captured.\n'
     report_tool date -u
     status
+    printf '\n== USB audio preflight ==\n'
+    usb_audio_preflight
     report_tool uname -srm
     report_file 'Operating system' "$R/etc/os-release"
     report_file 'CPU' "$R/proc/cpuinfo"
@@ -548,7 +670,7 @@ if [ "$ACTION" = discover ]; then
     mv "$HOME_DIR/discovery.log.new" "$HOME_DIR/discovery.log" || error 'Cannot save discovery results.'
     exit "$result"
 fi
-case "$ACTION" in mic-on|mic-off|restore|persist-on|persist-off|setup-default|cleanup|boot|boot-default|reset-temp|experiment-set|experiment-restore) ;; *) error 'Unknown action.' ;; esac
+case "$ACTION" in mic-on|mic-off|restore|persist-on|persist-off|setup-default|cleanup|boot|boot-default|reset-temp|experiment-set|experiment-restore|usb-audio-on|usb-audio-off) ;; *) error 'Unknown action.' ;; esac
 if [ "$ACTION" = setup-default ]; then migrate_legacy_state; fi
 if [ "$ACTION" = cleanup ] && [ ! -f "$BASELINE" ] && [ ! -e "$HOOK" ] && [ ! -d "$EXPERIMENTS" ]; then
     printf 'No app-owned mixer changes to clean up.\n'
@@ -571,9 +693,14 @@ if [ -d "$EXPERIMENTS" ]; then
     esac
 fi
 if [ "$ACTION" = experiment-restore ]; then exit 0; fi
-if [ "$ACTION" != cleanup ] || [ -f "$BASELINE" ] || [ -e "$HOOK" ]; then supported; fi
+case "$ACTION" in
+    usb-audio-on|usb-audio-off) ;;
+    *) if [ "$ACTION" != cleanup ] || [ -f "$BASELINE" ] || [ -e "$HOOK" ]; then supported; fi ;;
+esac
 
 case "$ACTION" in
+    usb-audio-on) usb_audio_on ;;
+    usb-audio-off) usb_audio_off ;;
     setup-default)
         if [ -f "$DEFAULT_CONFIGURED" ]; then
             printf 'Default MIC1 setup already configured.\n'
