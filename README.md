@@ -2,12 +2,8 @@
 
 <div align="center">
 
-**Your handheld's microphone controls. No terminal required.**
+**Hacker tool to activate the microphone in your handheld console**
 
-Enable it. Disable it. Keep your choice after a restart. Make some noise.
-
-Dubwise colours, bitmap lettering and a neon disco ball.
-Built for handheld buttons, not a desktop mouse.
 
 [**Download the NextUI .pak**](https://github.com/paiheulevrai/ChooChooHacker/releases/latest)
 &nbsp; | &nbsp;
