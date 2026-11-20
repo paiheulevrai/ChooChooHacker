@@ -17,7 +17,7 @@
 &nbsp; | &nbsp;
 [Report a problem / suggest a console](https://github.com/paiheulevrai/ChooChooHacker/issues)
 
-![ChooChooHacker main screen, with microphone status and a USB audio test option](docs/screenshots/main.png)
+![ChooChooHacker tabs for microphone and USB audio input](docs/screenshots/main.png)
 
 </div>
 
@@ -34,9 +34,10 @@
 | Keep either choice after rebooting | **Keep after restart** |
 | Check what the input actually hears | **Test** |
 | Troubleshoot audio or MIDI | **Info**, then export a diagnostic |
-| Find and test another audio input | **Discover inputs**, on the main screen |
-| Try USB audio from a host device | **Test USB audio IN**, Smart Pro only |
-| Experiment with input mixer settings | **Info > Explore** |
+| Find and test another audio input | **Info / Discover > Discover inputs** |
+| Receive USB audio from a host device | **USB IN > Enable USB audio IN**, Smart Pro only |
+| Keep USB audio IN after reboot | **USB IN > Keep after restart** |
+| Experiment with input mixer settings | **Info / Discover > Info > Explore** |
 | Control it from another application | The [public CLI](#cli-for-other-apps) |
 
 No background recording, telemetry or network access. No tracker modification.
@@ -49,9 +50,9 @@ The normal screen stays small; the technical details stay in Info.
 
 ## Screenshots
 
-| Three-second recording | Waveform and replay |
-| --- | --- |
-| ![Recording popup asking the user to make noise](docs/screenshots/recording.png) | ![Waveform popup during playback](docs/screenshots/waveform.png) |
+| USB audio IN | Three-second recording | Waveform and replay |
+| --- | --- | --- |
+| ![USB audio input control](docs/screenshots/usb-in.png) | ![Recording popup asking the user to make noise](docs/screenshots/recording.png) | ![Waveform popup during playback](docs/screenshots/waveform.png) |
 
 ![Scrollable audio and MIDI diagnostic screen](docs/screenshots/info.png)
 
@@ -65,7 +66,7 @@ not demonstrate a successful acoustic recording. No recorded sound is published.
 | Console / environment | Current status |
 | --- | --- |
 | **NextUI tg5040 / tg5050** | Default MIC1 route on first launch and every boot; physically tested only on Trimui Smart Pro (tg5040) |
-| **Smart Pro USB audio IN** | Experimental UAC1 on kernel 4.9.191; Windows → ChooChooTracker verified on one console |
+| **Smart Pro USB audio IN** | Experimental UAC1 on kernel 4.9.191; Windows → ChooChooTracker verified on one console; optional boot persistence |
 | RG353V | Planned testing; no automatic microphone profile yet |
 | Other Linux handhelds | Diagnostics and explicit input exploration; no automatic mixer patch |
 | PortMaster package | Experimental launcher/package; not hardware-tested |
@@ -158,17 +159,19 @@ not a hardware privacy switch.
 ### Try USB audio IN (experimental)
 
 This test is limited to the Trimui Smart Pro running kernel 4.9.191.
-Connect its USB-C device port to a host, select **Test USB audio IN**, and
+Open the **USB IN** tab and select **Enable USB audio IN**, then
 confirm. On Windows, send sound to **Speakers (AC Interface)**; in
 ChooChooTracker, arm **UAC1_Gadget** as an input. PC-to-console audio was
 confirmed on one Smart Pro. If the Tracker's **Default** output goes silent,
 use a Tracker build with the NextUI USB playback fix and relaunch it while USB
-audio is active. UAC2 and USB audio OUT are not offered.
+audio is active. USB audio OUT is not supported on this hardware, so no OUT tab
+is shown.
 
-USB ADB is unavailable while USB audio is active. Select **Stop USB audio** to
-restore ADB, or restart the console to return to its startup USB mode. Wi-Fi SSH
-is unaffected. Exiting ChooChooHacker leaves USB audio active so another app can
-use it.
+USB ADB is unavailable while USB audio is active. Select **Disable USB audio IN**
+to restore ADB. **Keep after restart: Yes** starts UAC1 on each NextUI boot and
+keeps ADB USB off; SSH over Wi-Fi is unaffected. Set it to **No** to remove the
+boot hook; the current USB mode is unchanged. Exiting ChooChooHacker leaves USB
+audio active so another app can use it.
 
 ### Send a useful bug report
 
@@ -178,28 +181,26 @@ the app's `diagnostics/` folder on the SD card. Review it and attach it to a
 with your console/OS, actions tried and what you heard. Nothing is uploaded
 automatically.
 
-## Main screen
+## Tabs
 
-- **MIC STATUS:** Enabled, Disabled, Found/inactive, Not found or Unknown.
+Left/Right switches between **MIC**, **USB IN**, and **INFO / DISCOVER**.
+Up/Down selects an item; A confirms; B goes back or exits; Start exits.
+
+- **MIC:** Shows **MIC STATUS** (Enabled, Disabled, Found/inactive, Not found or Unknown),
+  the on/off control, persistence and the three-second test.
   This describes the known internal MIC1 route, not a physical recording test.
-- **Enable / Disable mic:** choose the input state. Disable switches MIC1 boost
-  off and gain to zero; it is not a hardware privacy switch for every audio input.
-- **Keep after restart:** remember the chosen state, including **Disabled**.
-- **Test:** confirm, make noise for three seconds, see the waveform and hear
-  automatic replay at 25% digital level. Keep physical speaker volume low.
-- **Discover inputs:** look for usable audio inputs directly from the main
-  screen, without waiting for Info to load. Capture starts only after confirmation.
-- **Test USB audio IN:** experimentally switches the Smart Pro's USB gadget to
-  UAC1. ADB is restored by **Stop USB audio** or by restarting the console.
-- **Info:** scroll the audio/MIDI diagnostic report, export it or open Explore.
+- **USB IN:** Shows whether UAC1 is active or inactive, its persistence setting,
+  and the enable/disable control. While active, ADB USB is unavailable.
+- **INFO / DISCOVER:** Opens the audio/MIDI diagnostic report or discovers
+  named audio inputs. Info scrolls; A exports, X refreshes and Y opens Explore.
 
-Up/Down selects; physical A confirms; B cancels or goes back; Start exits.
-On Info, Left/Right moves a page, A exports, X refreshes and Y opens Explore.
-Keyboard: arrows, Enter, Escape, R refresh, D Explore, Q exit.
+The USB IN persistence toggle remembers either state. When enabled, the boot
+hook re-applies the selected state; an inactive setting leaves the default ADB
+gadget available. Remove persistence before uninstalling or moving the app.
 
 | Screen | Extra controls |
 | --- | --- |
-| Main | X refreshes the current mic settings |
+| Any tab | X refreshes the current device status |
 | Info | Up/Down scroll, Left/Right page, A export, X refresh, Y Explore |
 | Test popup | B stop/close; A replay after playback finishes |
 | Input controls | Up/Down choose, Left/Right edit, A apply, X undo, B restore/back |
@@ -225,9 +226,9 @@ leaving ADC levels unchanged. Speaker volume is never changed.
 - Switching Keep after restart off restores the original values and removes
   the app-owned hook. Do this before removing or moving the app.
 
-Only `.userdata/<tg5040|tg5050>/.hooks/boot.d/90-choochoohacker.sh` is
-installed. Existing `auto.sh`, root filesystem and other tools' hooks are not
-changed. Failed changes attempt rollback; failed restores retain recovery
+The mic hook and USB audio hook are installed separately under
+`.userdata/<tg5040|tg5050>/.hooks/boot.d/`. Existing `auto.sh`, root filesystem
+and other tools' hooks are not changed. Failed changes attempt rollback; failed restores retain recovery
 snapshots and report an error. Do not edit the same controls in another app
 while patched. Do not delete `state/` as a way to undo changes.
 
@@ -253,9 +254,10 @@ sections 32 KB, per-command timeout 3 seconds). The screen shows up to 32 KB;
 export contains the complete report within those per-section limits.
 
 The diagnostic reports USB-audio state and preflight. On the tested Smart Pro
-(kernel 4.9.191), standard UAC2 binding caused a kernel error. The app bundles
-GPLv2 UAC1 modules for an experimental IN-only test; UAC2 and OUT are not
-offered. Module source, build configuration and licensing are in
+(kernel 4.9.191), UAC1 input from the USB host works. USB audio OUT to the host
+requires an isochronous IN endpoint that this controller does not provide; UAC2
+binding also caused a kernel error. The app bundles GPLv2 UAC1 modules for an
+experimental IN-only test. Module source, build configuration and licensing are in
 [`usb-audio/`](usb-audio/).
 
 A on Info exports `diagnostics/diagnostic-YYYYMMDD-HHMMSS-PID.txt` beside the app.
@@ -388,7 +390,7 @@ unzip -t releases/choochoohacker-portmaster.zip
 
 Tests cover fake mixer rollback/restoration, temporary and persistent on/off,
 CLI from an unrelated directory without a display, diagnostic export, discovery,
-input experiment validation/recovery, USB audio hardware gating and ADB recovery,
+input experiment validation/recovery, USB audio hardware gating, persistence and ADB recovery,
 SDL dummy record/replay and exact three-second stopping, waveform bounds and
 offscreen navigation.
 

@@ -196,13 +196,16 @@ class MixerTests(unittest.TestCase):
             "rm -f \"$FAKE_USB_CONFIG/ffs.adb\" \"$FAKE_USB_CONFIG/uac1.usb0\"\n"
             "ln -s \"$FAKE_USB_UAC1\" \"$FAKE_USB_CONFIG/uac1.usb0\"\n"
             "printf '5100000.udc-controller\\n' > \"$FAKE_USB_UDC\"\n"
-            "if [ -e \"$FAKE_USB_DELAY_ENUMERATION\" ]; then "
+            "if [ -e \"$FAKE_USB_NO_HOST\" ]; then "
+            "echo 'not attached' > \"$FAKE_USB_STATE\"; "
+            "elif [ -e \"$FAKE_USB_DELAY_ENUMERATION\" ]; then "
             "echo 'not attached' > \"$FAKE_USB_STATE\"; "
             "else echo configured > \"$FAKE_USB_STATE\"; fi\n"
             "echo '1 [UAC1Gadget]: UAC1_Gadget' >> \"$FAKE_USB_CARDS\"\n"
         )
         helper.chmod(0o755)
         self.env["FAKE_USB_FAIL_HELPER"] = str(self.base / "fail-helper")
+        self.env["FAKE_USB_NO_HOST"] = str(self.base / "no-usb-host")
 
     def run_cli(self, *args, code=0):
         executable = self.app / "choochoohacker"
@@ -528,6 +531,50 @@ class MixerTests(unittest.TestCase):
         self.assertIn("Experimental USB audio IN is active", started.stdout)
         self.assertIn("USB_AUDIO_STATE=active", self.run_action("status").stdout)
 
+    def test_usb_audio_persistence_tracks_enabled_and_disabled_state(self):
+        self.prepare_usb_gadget()
+        enabled = self.run_action("usb-audio-persist-on")
+        self.assertIn("kept after every NextUI restart", enabled.stdout)
+        hook = self.root / "mnt/SDCARD/.userdata/tg5040/.hooks/boot.d/95-choochoohacker-usb-audio.sh"
+        desired = self.app / "state/usb-audio-target"
+        self.assertTrue(hook.is_file())
+        self.assertEqual(desired.read_text().strip(), "off")
+        self.run_action("usb-audio-on")
+        self.assertEqual(desired.read_text().strip(), "on")
+        self.run_action("usb-audio-off")
+        self.assertEqual(desired.read_text().strip(), "off")
+        self.assertIn("USB_AUDIO_PERSIST=enabled", self.run_action("status").stdout)
+        self.run_action("usb-audio-persist-off")
+        self.assertFalse(hook.exists())
+        self.assertFalse(desired.exists())
+
+    def test_usb_audio_persistent_boot_starts_before_host_is_connected(self):
+        self.prepare_usb_gadget()
+        hook_dir = self.root / "mnt/SDCARD/.userdata/tg5040/.hooks/boot.d"
+        hook_dir.mkdir(parents=True)
+        hook = hook_dir / "95-choochoohacker-usb-audio.sh"
+        hook.write_text("#!/bin/sh\n# ChooChooHacker owned USB audio hook v1\n")
+        desired = self.app / "state/usb-audio-target"
+        desired.parent.mkdir()
+        desired.write_text("on\n")
+        Path(self.env["FAKE_USB_NO_HOST"]).touch()
+        Path(self.env["FAKE_USB_STATE"]).write_text("not attached\n")
+        started = self.run_action("usb-audio-boot")
+        self.assertIn("Experimental USB audio IN is active", started.stdout)
+        self.assertTrue((Path(self.env["FAKE_USB_CONFIG"]) / "uac1.usb0").is_symlink())
+        self.assertIn("USB_AUDIO_STATE=active", self.run_action("status").stdout)
+
+    def test_usb_audio_persistence_preserves_a_foreign_boot_hook(self):
+        self.prepare_usb_gadget()
+        hook_dir = self.root / "mnt/SDCARD/.userdata/tg5040/.hooks/boot.d"
+        hook_dir.mkdir(parents=True)
+        hook = hook_dir / "95-choochoohacker-usb-audio.sh"
+        hook.write_text("# another tool\n")
+        result = self.run_action("usb-audio-persist-on", success=False)
+        self.assertIn("hook path is occupied", result.stderr)
+        self.assertEqual(hook.read_text(), "# another tool\n")
+        self.assertFalse((self.app / "state/usb-audio-target").exists())
+
     def test_usb_audio_start_failure_restores_adb_and_keeps_no_active_marker(self):
         self.prepare_usb_gadget()
         (self.base / "fail-helper").write_text("fail")
@@ -557,8 +604,11 @@ class MixerTests(unittest.TestCase):
 
     def test_usb_audio_cli_actions_work_without_initializing_the_display(self):
         self.prepare_usb_gadget()
+        self.run_cli("usb-audio-persist-on")
+        self.run_cli("usb-audio-boot")
         self.run_cli("usb-audio-on")
         self.run_cli("usb-audio-off")
+        self.run_cli("usb-audio-persist-off")
         self.assertIn("adbd:start", (self.base / "usb-actions").read_text())
 
     def test_discovery_uses_named_inputs_reports_failures_and_never_changes_mixers(self):

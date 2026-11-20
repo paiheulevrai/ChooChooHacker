@@ -1,13 +1,14 @@
 {
   "name": "ChooChoohacker - Microphone activator",
   "storefront_name": "ChooChoohacker - Microphone activator",
-  "version": "v0.1.5",
+  "version": "v0.1.6",
   "type": "TOOL",
-  "description": "Test the mic and experimental USB audio IN on the Smart Pro.",
+  "description": "Control the mic and persistent USB audio IN on Smart Pro.",
   "author": "paiheulevrai",
   "repo_url": "https://github.com/paiheulevrai/ChooChooHacker",
   "release_filename": "ChooChooHacker.pak.zip",
   "changelog": {
+    "v0.1.6": "Add USB audio IN persistence and tabbed controls.",
     "v0.1.5": "Fix UAC1 gadget rebind during USB audio switching.",
     "v0.1.4": "Add experimental UAC1 USB audio IN for the tested Smart Pro.",
     "v0.1.3": "Report USB-audio preflight and block unverified UAC2 gadget mode.",
@@ -15,6 +16,7 @@
   },
   "screenshots": [
     "docs/screenshots/main.png",
+    "docs/screenshots/usb-in.png",
     "docs/screenshots/info.png"
   ],
   "platforms": [

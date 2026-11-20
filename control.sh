@@ -9,6 +9,8 @@ TARGET_STATE="$STATE/mic-target"
 DEFAULT_CONFIGURED="$STATE/mic-default-configured"
 EXPERIMENTS="$STATE/experiments"
 USB_AUDIO_MARKER="$R/tmp/choochoohacker-uac1"
+USB_AUDIO_HOOK_MARKER='# ChooChooHacker owned USB audio hook v1'
+USB_AUDIO_TARGET="$STATE/usb-audio-target"
 PLATFORM=${PLATFORM:-}
 case "$PLATFORM" in
     tg5040|tg5050) ;;
@@ -17,6 +19,7 @@ case "$PLATFORM" in
         [ ! -f "$R/mnt/SDCARD/.system/tg5050/bin/run_hooks.sh" ] || PLATFORM=tg5050 ;;
 esac
 HOOK="$R/mnt/SDCARD/.userdata/$PLATFORM/.hooks/boot.d/90-choochoohacker.sh"
+USB_AUDIO_HOOK="$R/mnt/SDCARD/.userdata/$PLATFORM/.hooks/boot.d/95-choochoohacker-usb-audio.sh"
 LEGACY_HOME="$R/mnt/SDCARD/Tools/$PLATFORM/ChooChooHacker.pak"
 MARKER='# ChooChooHacker owned MIC1 hook v1'
 TEMP_MARKER='# ChooChooHacker owned MIC1 temporary reset v1'
@@ -229,6 +232,14 @@ status() {
     else printf 'UDC=unavailable\n'; fi
     printf 'USB_ROLE=%s\n' "$(read_file "$R/sys/devices/platform/soc/usbc0/otg_role")"
     printf 'USB_AUDIO_STATE=%s\n' "$(usb_audio_state)"
+    if usb_audio_persistent_hook; then
+        if usb_audio_desired >/dev/null; then printf 'USB_AUDIO_PERSIST=enabled\n'
+        else printf 'USB_AUDIO_PERSIST=ERROR: saved state invalid\n'; fi
+    elif [ -e "$USB_AUDIO_HOOK" ]; then
+        printf 'USB_AUDIO_PERSIST=ERROR: hook path occupied\n'
+    else
+        printf 'USB_AUDIO_PERSIST=disabled\n'
+    fi
 }
 
 report_file() {
@@ -255,6 +266,35 @@ report_tool() {
 usb_audio_uac1_link() {
     [ -L "$R/sys/kernel/config/usb_gadget/g1/configs/c.1/uac1.usb0" ]
 }
+usb_audio_persistent_hook() {
+    [ -f "$USB_AUDIO_HOOK" ] && grep -Fxq "$USB_AUDIO_HOOK_MARKER" "$USB_AUDIO_HOOK"
+}
+usb_audio_desired() {
+    [ -f "$USB_AUDIO_TARGET" ] || { printf 'off'; return 0; }
+    target=$(tr -d ' \t\r\n' < "$USB_AUDIO_TARGET")
+    case "$target" in on|off) printf '%s' "$target" ;; *) return 1 ;; esac
+}
+usb_audio_save_desired() {
+    target=$1
+    case "$target" in on|off) ;; *) return 1 ;; esac
+    printf '%s\n' "$target" > "$USB_AUDIO_TARGET.new" &&
+        chmod 600 "$USB_AUDIO_TARGET.new" &&
+        mv "$USB_AUDIO_TARGET.new" "$USB_AUDIO_TARGET"
+}
+usb_audio_install_hook() {
+    if [ -e "$USB_AUDIO_HOOK" ] && ! usb_audio_persistent_hook; then return 1; fi
+    mkdir -p "$(dirname "$USB_AUDIO_HOOK")" || return 1
+    escaped=$(printf '%s' "$HOME_DIR" | sed "s/'/'\\\\''/g")
+    if ! {
+        printf '#!/bin/sh\n%s\n' "$USB_AUDIO_HOOK_MARKER"
+        printf "CHH_HOME='%s'\n" "$escaped"
+        printf 'exec "$CHH_HOME/control.sh" usb-audio-boot >> "$CHH_HOME/boot.log" 2>&1\n'
+    } > "$USB_AUDIO_HOOK.new" || ! chmod +x "$USB_AUDIO_HOOK.new" ||
+        ! mv "$USB_AUDIO_HOOK.new" "$USB_AUDIO_HOOK"; then
+        rm -f "$USB_AUDIO_HOOK.new"
+        return 1
+    fi
+}
 usb_audio_adb_link() {
     [ -L "$R/sys/kernel/config/usb_gadget/g1/configs/c.1/ffs.adb" ]
 }
@@ -263,7 +303,10 @@ usb_audio_gadget_state() {
 }
 usb_audio_bound() {
     [ "$(tr -d ' \t\r\n' < "$R/sys/kernel/config/usb_gadget/g1/UDC" 2>/dev/null)" = '5100000.udc-controller' ] &&
-        [ "$(usb_audio_gadget_state)" = configured ]
+        case "$(usb_audio_gadget_state)" in
+            notattached|attached|powered|default|addressed|configured|suspended) true ;;
+            *) false ;;
+        esac
 }
 usb_audio_active() {
     usb_audio_uac1_link && usb_audio_bound
@@ -336,19 +379,75 @@ usb_audio_on() {
         return 1
     fi
     printf 'active\n' > "$USB_AUDIO_MARKER" || error 'USB audio is active but recovery state could not be updated.'
+    if usb_audio_persistent_hook && ! usb_audio_save_desired on; then
+        error 'USB audio is active, but its persistent setting could not be saved.'
+    fi
     printf 'Experimental USB audio IN is active. ADB is off until stopped or the console restarts.\n'
 }
 usb_audio_off() {
     state=$(usb_audio_state)
     case "$state" in
         active|recovery-needed) ;;
-        available) printf 'USB audio IN is already off.\n'; return 0 ;;
+        available)
+            if usb_audio_persistent_hook; then
+                usb_audio_save_desired off || error 'Cannot save the persistent USB audio setting.'
+            fi
+            printf 'USB audio IN is already off.\n'
+            return 0 ;;
         *) error 'USB gadget state is unknown; restart the console to restore USB safely.' ;;
     esac
-    usb_audio_restore_adb ||
+    if usb_audio_persistent_hook; then
+        previous_target=$(usb_audio_desired) || error 'Saved USB audio setting is invalid; refusing to change it.'
+        usb_audio_save_desired off || error 'Cannot save the persistent USB audio setting.'
+    fi
+    if ! usb_audio_restore_adb; then
+        if usb_audio_persistent_hook; then
+            usb_audio_save_desired "$previous_target" ||
+                printf 'ERROR: Could not restore the persistent USB audio setting.\n' >&2
+        fi
         error 'Could not restore ADB. The recovery marker was kept; restart the console to restore USB.'
+    fi
     rm -f "$USB_AUDIO_MARKER" || error 'ADB is restored, but the USB recovery marker could not be removed.'
     printf 'USB audio stopped. ADB is restored.\n'
+}
+usb_audio_persist_on() {
+    usb_audio_supported || error 'USB audio persistence is only available on the tested Smart Pro firmware.'
+    case "$(usb_audio_state)" in
+        available|active) ;;
+        *) error 'USB gadget state is unknown; persistence was not changed.' ;;
+    esac
+    if [ -e "$USB_AUDIO_HOOK" ] && ! usb_audio_persistent_hook; then
+        error 'USB audio boot hook path is occupied; preserving the existing file.'
+    fi
+    previous_target=
+    if usb_audio_persistent_hook; then previous_target=$(usb_audio_desired) ||
+        error 'Saved USB audio setting is invalid; refusing to change it.'
+    fi
+    if usb_audio_active; then target=on; else target=off; fi
+    usb_audio_save_desired "$target" || error 'Cannot save the persistent USB audio setting.'
+    if ! usb_audio_install_hook; then
+        if [ -n "$previous_target" ]; then usb_audio_save_desired "$previous_target"
+        else rm -f "$USB_AUDIO_TARGET" "$USB_AUDIO_TARGET.new"; fi
+        error 'Cannot install the USB audio boot hook.'
+    fi
+    printf 'USB audio setting will be kept after every NextUI restart.\n'
+}
+usb_audio_persist_off() {
+    if [ -e "$USB_AUDIO_HOOK" ] && ! usb_audio_persistent_hook; then
+        error 'Not removing a boot hook owned by another tool.'
+    fi
+    if usb_audio_persistent_hook; then
+        rm "$USB_AUDIO_HOOK" || error 'Cannot remove the USB audio boot hook.'
+    fi
+    rm -f "$USB_AUDIO_TARGET" "$USB_AUDIO_TARGET.new" ||
+        error 'Cannot clear the persistent USB audio setting.'
+    printf 'USB audio persistence disabled. Current USB mode is unchanged.\n'
+}
+usb_audio_boot() {
+    usb_audio_persistent_hook || error 'USB audio boot action requires its persistent hook.'
+    target=$(usb_audio_desired) || error 'Saved USB audio setting is invalid; refusing changes.'
+    if [ "$target" = on ]; then usb_audio_on
+    else printf 'USB audio remains off after restart.\n'; fi
 }
 usb_audio_preflight() {
     state=$(usb_audio_state)
@@ -670,7 +769,7 @@ if [ "$ACTION" = discover ]; then
     mv "$HOME_DIR/discovery.log.new" "$HOME_DIR/discovery.log" || error 'Cannot save discovery results.'
     exit "$result"
 fi
-case "$ACTION" in mic-on|mic-off|restore|persist-on|persist-off|setup-default|cleanup|boot|boot-default|reset-temp|experiment-set|experiment-restore|usb-audio-on|usb-audio-off) ;; *) error 'Unknown action.' ;; esac
+case "$ACTION" in mic-on|mic-off|restore|persist-on|persist-off|setup-default|cleanup|boot|boot-default|reset-temp|experiment-set|experiment-restore|usb-audio-on|usb-audio-off|usb-audio-persist-on|usb-audio-persist-off|usb-audio-boot) ;; *) error 'Unknown action.' ;; esac
 if [ "$ACTION" = setup-default ]; then migrate_legacy_state; fi
 if [ "$ACTION" = cleanup ] && [ ! -f "$BASELINE" ] && [ ! -e "$HOOK" ] && [ ! -d "$EXPERIMENTS" ]; then
     printf 'No app-owned mixer changes to clean up.\n'
@@ -688,19 +787,22 @@ if [ "$ACTION" = experiment-set ]; then
 fi
 if [ -d "$EXPERIMENTS" ]; then
     case "$ACTION" in
-        boot|boot-default|reset-temp) printf 'WARNING: Pending manual experiments are not restored by boot hooks; inspect state/experiments.\n' >&2 ;;
+        boot|boot-default|reset-temp|usb-audio-boot) printf 'WARNING: Pending manual experiments are not restored by boot hooks; inspect state/experiments.\n' >&2 ;;
         *) experiment_restore ;;
     esac
 fi
 if [ "$ACTION" = experiment-restore ]; then exit 0; fi
 case "$ACTION" in
-    usb-audio-on|usb-audio-off) ;;
+    usb-audio-on|usb-audio-off|usb-audio-persist-on|usb-audio-persist-off|usb-audio-boot) ;;
     *) if [ "$ACTION" != cleanup ] || [ -f "$BASELINE" ] || [ -e "$HOOK" ]; then supported; fi ;;
 esac
 
 case "$ACTION" in
     usb-audio-on) usb_audio_on ;;
     usb-audio-off) usb_audio_off ;;
+    usb-audio-persist-on) usb_audio_persist_on ;;
+    usb-audio-persist-off) usb_audio_persist_off ;;
+    usb-audio-boot) usb_audio_boot ;;
     setup-default)
         if [ -f "$DEFAULT_CONFIGURED" ]; then
             printf 'Default MIC1 setup already configured.\n'
